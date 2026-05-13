@@ -1,0 +1,1937 @@
+from __future__ import annotations
+
+import json
+import os
+import random
+import urllib.error
+import urllib.request
+from typing import Any
+
+from app.db import connect
+from app.prompts import (
+    COMPACT_SYSTEM_PROMPT,
+    COMPACT_VERIFY_PROMPT,
+    SYSTEM_PROMPT,
+    VERIFY_PROMPT,
+    build_user_prompt,
+    build_verify_prompt,
+)
+
+
+class LlmError(RuntimeError):
+    pass
+
+
+DEFAULT_GGUF_MODEL = ""
+DEFAULT_CONTEXT_TOKENS = 8192
+DEFAULT_RESPONSE_TOKEN_CAP = 1500
+DEFAULT_RESPONSE_HARD_CAP = 2000
+OPTIONAL_IDENTITY_FIELDS = {"player_public_name", "player_title"}
+TURN_WRAPPER_KEYS = ("turn", "result", "response", "output")
+TURN_NARRATION_KEYS = ("narration", "narrative", "story", "scene_text", "scene", "response", "text", "content", "message", "description", "prose")
+TURN_SEGMENT_KEYS = ("narration_segments", "segments", "scene_segments", "response_segments")
+TURN_SEGMENT_TEXT_KEYS = ("text", "content", "narration", "narrative", "description", "prose", "body", "scene")
+TURN_SEGMENT_LABEL_KEYS = ("label", "title", "name", "type", "kind")
+TURN_SHAPE_KEYS = {
+    "scene_plan",
+    "narration_segments",
+    "narration",
+    "player",
+    "self_check",
+    "turn_summary",
+    "scene_focus",
+    "skill_changes",
+    "inventory_changes",
+    "equipment_slots",
+    "equipment_changes",
+    "inventory_capacity_modifiers",
+    "locations",
+    "npcs",
+    "relationships",
+    "events",
+    "conversations",
+    "response_drafts",
+    "index_updates",
+    "ability_updates",
+    "gm_events",
+    "journal",
+}
+MISSING_NARRATION_MESSAGE = "Model returned a turn without narration text."
+PREVIOUS_LIFE_IDENTITY_FIELDS = {"previous_life_age", "previous_life_sex"}
+SETUP_RANDOMIZER_FIELD_GROUPS = {
+    "character": [
+        "backstory_mode",
+        "memory_policy",
+        "character_backstory",
+        "player_name",
+        "player_public_name",
+        "player_title",
+        "player_age",
+        "player_sex",
+        "previous_life_age",
+        "previous_life_sex",
+        "special_ability_origin",
+        "special_abilities",
+    ],
+    "world": [
+        "world_style",
+        "magic_level",
+        "world_races",
+        "race_magic_enabled",
+        "race_magic_rarity",
+        "tech_level",
+        "tone",
+        "economy",
+        "start_location",
+        "custom_style",
+        "race_magic_rules",
+        "race_ability_rules",
+    ],
+    "people": ["npc_density", "quest_style", "faction_pressure", "npc_stat_scaling", "npc_skill_frequency", "rank_scale"],
+    "rules": [
+        "difficulty",
+        "death_rules",
+        "narration_detail",
+        "loot_rarity",
+        "inventory_weight_limit",
+        "inventory_slot_limit",
+        "inventory_rules",
+        "leveling_system",
+        "xp_growth_speed",
+        "game_system",
+        "system_style",
+        "proficiency_system",
+        "skill_levels_enabled",
+        "skill_style",
+        "proficiency_access",
+        "new_skill_frequency",
+        "skill_growth_speed",
+        "proficiency_growth_speed",
+        "custom_skills",
+    ],
+}
+SETUP_RANDOMIZER_ALL_FIELD_ORDER = [
+    "backstory_mode",
+    "world_style",
+    "magic_level",
+    "world_races",
+    "race_magic_enabled",
+    "race_magic_rarity",
+    "tech_level",
+    "tone",
+    "economy",
+    "difficulty",
+    "death_rules",
+    "narration_detail",
+    "loot_rarity",
+    "inventory_weight_limit",
+    "inventory_slot_limit",
+    "inventory_rules",
+    "leveling_system",
+    "xp_growth_speed",
+    "game_system",
+    "system_style",
+    "skill_style",
+    "proficiency_system",
+    "skill_levels_enabled",
+    "proficiency_access",
+    "new_skill_frequency",
+    "skill_growth_speed",
+    "proficiency_growth_speed",
+    "npc_density",
+    "quest_style",
+    "faction_pressure",
+    "npc_stat_scaling",
+    "npc_skill_frequency",
+    "rank_scale",
+    "memory_policy",
+    "start_location",
+    "custom_style",
+    "race_magic_rules",
+    "race_ability_rules",
+    "character_backstory",
+    "player_name",
+    "player_public_name",
+    "player_title",
+    "player_age",
+    "player_sex",
+    "previous_life_age",
+    "previous_life_sex",
+    "special_ability_origin",
+    "custom_skills",
+    "special_abilities",
+]
+SETUP_RANDOMIZER_FALLBACKS = {
+    "player_name": ["Mara", "Corvin", "Iris Vale", "Ren", "Sable", "Tamsin", "Kael"],
+    "player_public_name": ["", "Ash", "River", "Patch", "Northlight", "Second Bell"],
+    "player_title": ["", "the Weatherwise", "of Kiln Street", "the Long Listener", "the Spare Key"],
+    "player_age": ["17", "19", "24", "31", "middle-aged", "appears 30", "adult"],
+    "player_sex": ["", "female", "male", "intersex", "sexless or constructed", "varies by form"],
+    "previous_life_age": ["19", "27", "34", "46", "elderly", "unknown"],
+    "previous_life_sex": ["", "female", "male", "intersex", "sexless or constructed", "varies by form"],
+    "special_ability_origin": ["none", "acquired", "innate"],
+    "backstory_mode": ["known", "hidden", "fragmented memories", "reincarnated", "transmigrated", "nameless drifter"],
+    "memory_policy": ["known", "ordinary memory", "details emerge through choices", "rumors may be wrong", "private details stay private", "remembers former life"],
+    "character_backstory": [
+        "Born in a canal district where freight crews raised children as extra hands, they grew up reading cargo marks, weather signs, and people's excuses. Before the story begins, they worked as a route clerk who kept small settlements supplied, and they reached the starting area carrying one delayed delivery, two unpaid favors, and a fear that their last ledger was altered.",
+        "Born in a hill village that treated old ruins as common landmarks, they spent most of their life repairing tools, copying maps, and guiding travelers through roads locals considered ordinary. They left after a winter landslide exposed sealed stonework under the village shrine, bringing practical skills, a few local contacts, and one question their elders refused to answer.",
+        "In their former life, they died in a hospital stairwell during a citywide blackout after spending years as an overworked emergency technician. They woke in this world with most memories intact but no proof of who they had been, carrying modern habits of triage, suspicion of official silence, and a need to learn which rules of the new world can still kill them.",
+    ],
+    "skill_style": ["standard", "generous", "training-heavy", "strict"],
+    "proficiency_access": ["learned", "familiar actions free", "only expert tasks require training"],
+    "new_skill_frequency": ["normal", "very rare", "rare", "frequent", "very frequent"],
+    "world_style": ["frontier dark fantasy", "wuxia sect politics", "system apocalypse", "post-collapse settlement", "mage academy intrigue", "low magic mercantile city", "space frontier salvage"],
+    "start_location": ["Mosswake Gate", "Blackwater Relay", "The Ninth Stair", "Cinder Market", "Ashford Clinic", "Red Lantern Dock", "Saint Vale Station"],
+    "tone": ["grounded adventure", "survival pressure", "political intrigue", "mythic progression", "grim road story"],
+    "economy": ["scarce", "barter-heavy", "coin-driven", "guild-controlled"],
+    "loot_rarity": ["earned and uncommon", "scarce mundane", "generous adventuring", "high-magic loot"],
+    "inventory_weight_limit": [45, 60, 80, 120],
+    "inventory_slot_limit": [18, 24, 32, 40],
+    "inventory_rules": [
+        "Backpacks add organization more than strength; magic storage is rare and carries risks.",
+        "Accessory slots follow anatomy unless an ability, spell, or special item creates more room.",
+        "Superhuman stacks require clear stats, magic, or container support.",
+    ],
+    "magic_level": ["rare", "forbidden", "common utility", "cultivation", "none"],
+    "world_races": ["human", "human, elf, dwarf", "human, beastfolk", "human, riverfolk, stonekin"],
+    "race_magic_rarity": ["same as world magic", "rare except gifted races", "common for specific races", "bloodline locked", "cultural training based"],
+    "race_magic_rules": [
+        "Humans need formal training, elves inherit low magic, dwarves specialize in rune craft, and beastfolk rarely cast spells but sense spirits.",
+        "Magic is learned culturally: each people has different schools, taboos, and costs rather than equal access.",
+        "Only a few bloodlines can cast, but every race has at least one rare path into magic through training, vows, or relics.",
+    ],
+    "race_ability_rules": [
+        "Humans have broad training access, elves can sense old growth and glamour, dwarves learn craft-oaths, and beastfolk inherit heightened senses.",
+        "Racial abilities are social and biological rather than class powers; they should help in scenes without replacing skills.",
+        "Innate gifts are modest at the start and stronger racial arts require culture, mentors, rites, or long practice.",
+    ],
+    "custom_skills": [
+        "Do not seed starting skills; discover skill names only after repeated use, training, or clear milestones.",
+        "Specialized proficiencies require mentors or manuals, ordinary attempts are allowed, mastery needs downtime.",
+        "Combat, social, craft, and survival skills appear only after the player actually practices or earns them in play.",
+    ],
+    "tech_level": ["iron age", "medieval", "early industrial", "near future", "spacefaring salvage"],
+    "custom_style": ["", "Keep the opening local and personal before revealing larger threats.", "Every settlement should have at least one practical reason to exist.", "Avoid chosen-one framing; make reputation earned through visible choices."],
+    "npc_density": ["moderate", "sparse", "dense", "faction-heavy"],
+    "quest_style": ["emergent", "job board", "faction chains", "personal mysteries"],
+    "faction_pressure": ["local disputes", "sect hierarchy", "guild control", "military occupation", "hidden cults"],
+    "npc_stat_scaling": ["relative ranks", "mostly weaker", "near player", "swingy ranks", "elite-heavy"],
+    "npc_skill_frequency": ["some trained NPCs", "no special NPC skills", "rare specialists", "many trained NPCs", "almost everyone has skills"],
+    "rank_scale": ["F,E,D,C,B,A,S,SS,SSS", "D,C,B,A,S", "Common,Trained,Veteran,Elite,Mythic"],
+    "difficulty": ["normal", "easy", "hard", "brutal"],
+    "narration_detail": ["balanced", "rich", "expansive", "concise"],
+    "skill_growth_speed": ["normal", "very slow", "slow", "fast", "very fast"],
+    "proficiency_growth_speed": ["normal", "very slow", "slow", "fast", "very fast"],
+    "xp_growth_speed": ["normal", "very slow", "slow", "fast", "very fast"],
+    "death_rules": ["downed, not deleted", "lasting injuries", "permadeath threat", "narrative setback"],
+    "system_style": ["subtle blue-window system", "cold quest-log interface", "cultivation status pane", "diegetic omen prompts"],
+}
+SETUP_RANDOMIZER_BOOLEAN_FALLBACKS = {
+    "race_magic_enabled": [False, True],
+    "leveling_system": [True, False],
+    "game_system": [False, True],
+    "proficiency_system": [True, False],
+    "skill_levels_enabled": [True, False],
+}
+SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
+    {
+        "name": "Echo Step",
+        "description": "A short burst of impossible movement, useful for escapes or sudden positioning.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "brief fatigue after repeated use",
+    },
+    {
+        "name": "Ashen Oath",
+        "description": "Can sense when someone nearby is hiding a binding promise or unpaid debt.",
+        "locked": True,
+        "prerequisites": "Awakens after witnessing a broken oath with real consequences.",
+        "cost": "mental strain when pushed",
+    },
+    {
+        "name": "Thread Sense",
+        "description": "Briefly notices the emotional weight attached to an object or place.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "sensory overload after repeated use",
+    },
+]
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _int_value(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def context_window_tokens(config: dict[str, Any] | None = None) -> int:
+    model_config = config or get_model_config()
+    if model_config.get("provider") == "llama_cpp":
+        return _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    return _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
+
+
+def _response_token_settings(config: dict[str, Any] | None = None) -> tuple[int, int]:
+    model_config = config or get_model_config()
+    soft_default = _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP)
+    hard_default = _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP))
+    soft_cap = max(64, _int_value(model_config.get("response_token_cap"), soft_default))
+    hard_cap = max(soft_cap, _int_value(model_config.get("response_token_hard_cap"), hard_default))
+    return soft_cap, hard_cap
+
+
+def _configured_response_tokens(config: dict[str, Any], max_tokens: int | None) -> int:
+    soft_cap, hard_cap = _response_token_settings(config)
+    requested = _int_value(max_tokens, soft_cap) if max_tokens is not None else soft_cap
+    return max(1, min(requested, hard_cap))
+
+
+def _response_token_cap(config: dict[str, Any], system_prompt: str, user_prompt: str, max_tokens: int | None) -> int:
+    requested_tokens = _configured_response_tokens(config, max_tokens)
+    context_window = max(512, context_window_tokens(config))
+    reserve_tokens = max(0, _env_int("AI_RPG_CONTEXT_RESERVE_TOKENS", 96))
+    available_tokens = context_window - estimated_tokens(f"{system_prompt}\n{user_prompt}") - reserve_tokens
+    if available_tokens <= 0:
+        return min(requested_tokens, max(64, _env_int("AI_RPG_MIN_RESPONSE_TOKENS", 160)))
+    return max(1, min(requested_tokens, available_tokens))
+
+
+def _json_repair_token_cap(config: dict[str, Any], max_tokens: int | None) -> int:
+    soft_cap, hard_cap = _response_token_settings(config)
+    requested = max(_int_value(max_tokens, soft_cap) if max_tokens is not None else soft_cap, soft_cap, 700)
+    repair_hard_cap = _env_int("AI_RPG_JSON_REPAIR_TOKENS", hard_cap)
+    return max(1, min(requested, hard_cap, repair_hard_cap))
+
+
+def _is_context_length_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "context_length_exceeded",
+        "maximum context length",
+        "context length",
+        "reduce the length of the messages",
+        "requested too many tokens",
+        "num_ctx",
+        "n_ctx",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        text = f"{text} {reason}".lower()
+    return "timed out" in text or "timeout" in text
+
+
+def _transport_error_message(exc: Exception, timeout: int) -> str:
+    if _is_timeout_error(exc):
+        return f"timed out after {timeout}s"
+    return str(exc) or exc.__class__.__name__
+
+
+def _attach_model_usage(exc: LlmError, usage: list[dict[str, Any]]) -> LlmError:
+    exc.model_usage = list(usage)
+    return exc
+
+
+def _trim_text(text: str, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit].rstrip() + "..."
+
+
+def _trim_strings(value: Any, limit: int) -> Any:
+    if isinstance(value, str):
+        return _trim_text(value, limit)
+    if isinstance(value, list):
+        return [_trim_strings(item, limit) for item in value]
+    if isinstance(value, dict):
+        return {key: _trim_strings(item, limit) for key, item in value.items()}
+    return value
+
+
+def _comma_separated_phrases(value: Any, limit: int = 800) -> str:
+    if isinstance(value, list):
+        raw = ",".join(str(item or "") for item in value)
+    else:
+        raw = str(value or "")
+    for separator in ("\r", "\n", ";", "|"):
+        raw = raw.replace(separator, ",")
+    parts: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        clean = part.strip()
+        if clean.startswith(("- ", "* ")):
+            clean = clean[2:].strip()
+        marker, _, rest = clean.partition(" ")
+        if marker.rstrip(".)").isdigit() and marker.endswith((".", ")")):
+            clean = rest.strip()
+        key = clean.lower()
+        if not clean or key in seen:
+            continue
+        seen.add(key)
+        parts.append(clean)
+    return ", ".join(parts)[:limit]
+
+
+def _compact_list(value: Any, limit: int, string_limit: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    return [_trim_strings(item, string_limit) for item in value[:limit]]
+
+
+def _compact_locations(value: Any) -> list[dict[str, Any]]:
+    locations: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return locations
+    for location in value[:4]:
+        if not isinstance(location, dict):
+            continue
+        compact_location = {
+            "code": location.get("code"),
+            "name": location.get("name"),
+            "summary": location.get("summary"),
+            "visit_count": location.get("visit_count"),
+            "npcs": _compact_list(location.get("npcs"), 5, 360),
+            "events": _compact_list(location.get("events"), 4, 360),
+        }
+        locations.append(_trim_strings(compact_location, 500))
+    return locations
+
+
+def _compact_turn_context(context: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(context)
+    compact.pop("history", None)
+    compact["settings"] = _trim_strings(context.get("settings"), 700)
+    compact["gm_notes"] = _trim_strings(context.get("gm_notes"), 900)
+    compact["gm_events"] = _compact_list(context.get("gm_events"), 8, 360)
+    compact["player"] = _trim_strings(context.get("player"), 500)
+    compact["current_location"] = _trim_strings(context.get("current_location"), 500)
+    compact["action_context"] = _trim_strings(context.get("action_context"), 700)
+    compact["skills"] = _compact_list(context.get("skills"), 12, 360)
+    compact["abilities"] = _compact_list(context.get("abilities"), 10, 420)
+    compact["player_aliases"] = _compact_list(context.get("player_aliases"), 6, 360)
+    compact["active_player_alias"] = _trim_strings(context.get("active_player_alias"), 360)
+    compact["inventory"] = _compact_list(context.get("inventory"), 18, 360)
+    compact["equipment_slots"] = _compact_list(context.get("equipment_slots"), 16, 320)
+    compact["equipment_effects"] = _trim_strings(context.get("equipment_effects"), 520)
+    compact["inventory_capacity_modifiers"] = _compact_list(context.get("inventory_capacity_modifiers"), 12, 320)
+    compact["inventory_summary"] = _trim_strings(context.get("inventory_summary"), 420)
+    compact["locations"] = _compact_locations(context.get("locations"))
+    compact["recognition"] = _compact_list(context.get("recognition"), 4, 360)
+    compact["relationships"] = _compact_list(context.get("relationships"), 12, 320)
+    compact["events"] = _compact_list(context.get("events"), 8, 360)
+    compact["conversations"] = _compact_list(context.get("conversations"), 8, 360)
+    compact["response_drafts"] = _compact_list(context.get("response_drafts"), 4, 320)
+    compact["karma_history"] = _compact_list(context.get("karma_history"), 4, 320)
+    compact["relevant_sources"] = _compact_list(context.get("relevant_sources"), 6, 320)
+    compact["retrieval"] = _trim_strings(context.get("retrieval"), 360)
+    compact["turn_summaries"] = _compact_list(context.get("turn_summaries"), 6, 260)
+    return compact
+
+
+def _turn_max_tokens(context: dict[str, Any], phase: str, compact: bool = False) -> int:
+    env_name = "AI_RPG_TURN_VERIFY_TOKENS" if phase == "verify" else "AI_RPG_TURN_DRAFT_TOKENS"
+    requested_tokens = _env_int(env_name, _turn_token_default(context, phase))
+    if not compact:
+        return requested_tokens
+    compact_default = 700 if phase == "verify" else 900
+    compact_env = "AI_RPG_TURN_COMPACT_VERIFY_TOKENS" if phase == "verify" else "AI_RPG_TURN_COMPACT_DRAFT_TOKENS"
+    return min(requested_tokens, _env_int(compact_env, compact_default))
+
+
+def _model_timeout(default_ollama: int, default_llama_cpp: int, env_name: str = "") -> int:
+    config = get_model_config()
+    default = default_llama_cpp if config.get("provider") == "llama_cpp" else default_ollama
+    if env_name and os.getenv(env_name):
+        return _env_int(env_name, default)
+    if config.get("provider") == "llama_cpp":
+        return _env_int("AI_RPG_LLAMA_CPP_TIMEOUT", default_llama_cpp)
+    return _env_int("AI_RPG_OLLAMA_TIMEOUT", default_ollama)
+
+
+def get_model_config() -> dict[str, Any]:
+    default = {
+        "provider": os.getenv("AI_RPG_MODEL_PROVIDER", "ollama"),
+        "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.1"),
+        "llama_cpp_base_url": os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080"),
+        "gguf_model_path": os.getenv("AI_RPG_GGUF_MODEL", DEFAULT_GGUF_MODEL),
+        "response_token_cap": _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
+        "response_token_hard_cap": _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP)),
+    }
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'model_config'").fetchone()
+    except Exception:
+        return default
+    if not row:
+        return default
+    try:
+        stored = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return default
+    return {**default, **stored}
+
+
+def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
+    current = get_model_config()
+    allowed = {
+        "provider",
+        "ollama_base_url",
+        "ollama_model",
+        "llama_cpp_base_url",
+        "gguf_model_path",
+    }
+    next_config = {**current}
+    for key in allowed:
+        if key in config:
+            next_config[key] = str(config.get(key) or "").strip()
+    if "response_token_cap" in config:
+        next_config["response_token_cap"] = max(64, min(100_000, _int_value(config.get("response_token_cap"), DEFAULT_RESPONSE_TOKEN_CAP)))
+    if "response_token_hard_cap" in config:
+        next_config["response_token_hard_cap"] = max(64, min(100_000, _int_value(config.get("response_token_hard_cap"), DEFAULT_RESPONSE_HARD_CAP)))
+    soft_cap, hard_cap = _response_token_settings(next_config)
+    next_config["response_token_cap"] = soft_cap
+    next_config["response_token_hard_cap"] = hard_cap
+    if next_config["provider"] not in {"ollama", "llama_cpp"}:
+        next_config["provider"] = "ollama"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("model_config", json.dumps(next_config, ensure_ascii=True)),
+        )
+    return next_config
+
+
+def test_model_connection() -> dict[str, Any]:
+    config = get_model_config()
+    provider = str(config.get("provider") or "llama_cpp")
+    if provider == "llama_cpp":
+        base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
+        url = f"{base_url}/v1/models"
+    else:
+        base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
+        url = f"{base_url}/api/tags"
+
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "provider": provider,
+            "url": url,
+            "error": str(exc),
+            "config": config,
+        }
+
+    models = payload.get("data") or payload.get("models") or []
+    model_names = []
+    for model in models[:8]:
+        if isinstance(model, dict):
+            model_names.append(str(model.get("id") or model.get("name") or model.get("model") or "unknown"))
+        else:
+            model_names.append(str(model))
+    return {
+        "ok": True,
+        "provider": provider,
+        "url": url,
+        "models": model_names,
+        "config": config,
+    }
+
+
+def _setup_randomizer_return_fields(group: str, current_setup: dict[str, Any], text_mode: bool = False) -> list[str]:
+    locked_fields = set(current_setup.get("_locked_fields") or [])
+    if text_mode:
+        return [group.split(":", 1)[1]]
+    if group.startswith("field:"):
+        return_fields = [group.split(":", 1)[1]]
+    elif group == "all":
+        return_fields = SETUP_RANDOMIZER_ALL_FIELD_ORDER
+    else:
+        return_fields = SETUP_RANDOMIZER_FIELD_GROUPS.get(group, SETUP_RANDOMIZER_FIELD_GROUPS["character"])
+    return [field for field in return_fields if field not in locked_fields]
+
+
+def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
+    if field in PREVIOUS_LIFE_IDENTITY_FIELDS and not _setup_has_former_life_identity(current_setup):
+        return ""
+    if field in OPTIONAL_IDENTITY_FIELDS:
+        chance = _optional_identity_fill_chance(field, current_setup)
+        if random.random() > chance:
+            return ""
+    if field in SETUP_RANDOMIZER_BOOLEAN_FALLBACKS:
+        return random.choice(SETUP_RANDOMIZER_BOOLEAN_FALLBACKS[field])
+    if field == "special_abilities":
+        return _fallback_special_abilities(current_setup)
+    values = SETUP_RANDOMIZER_FALLBACKS.get(field)
+    if values:
+        value = random.choice(values)
+        if field == "custom_skills":
+            return _comma_separated_phrases(value)
+        return value
+    return current_setup.get(field)
+
+
+def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str, Any]]:
+    field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
+    origin = str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").strip().lower()
+    if origin == "none":
+        return []
+    quantity_locked = bool(field_context.get("quantity_locked"))
+    try:
+        requested_count = max(0, min(5, int(field_context.get("requested_count") if field_context.get("requested_count") is not None else field_context.get("existing_count") or 0)))
+    except (TypeError, ValueError):
+        requested_count = 0
+    count = requested_count if quantity_locked else random.randint(1, 3)
+    abilities: list[dict[str, Any]] = []
+    for index in range(count):
+        ability = dict(SETUP_RANDOMIZER_ABILITY_FALLBACKS[index % len(SETUP_RANDOMIZER_ABILITY_FALLBACKS)])
+        if origin == "acquired":
+            ability["locked"] = True
+            ability["prerequisites"] = ability.get("prerequisites") or "Unlocks through training, a mentor, or a costly field discovery."
+        abilities.append(ability)
+    return abilities
+
+
+def fallback_setup_randomization(group: str, current: dict[str, Any] | None = None, reason: str = "") -> dict[str, Any] | None:
+    if group.startswith(("text:", "optimize:")):
+        return None
+    current_setup = current or {}
+    return_fields = _setup_randomizer_return_fields(group, current_setup)
+    if not return_fields:
+        return {"fields": {}, "fallback_used": True, "fallback_reason": _trim_text(reason, 240) if reason else "No unlocked setup fields were requested."}
+    fields: dict[str, Any] = {}
+    for field in return_fields:
+        value = _fallback_setup_value(field, {**current_setup, **fields})
+        if value is None:
+            continue
+        fields[field] = value
+    if "custom_skills" in fields:
+        fields["custom_skills"] = _comma_separated_phrases(fields.get("custom_skills"))
+    return {
+        "fields": fields,
+        "fallback_used": True,
+        "fallback_reason": _trim_text(reason, 240) if reason else "Model randomizer failed; deterministic setup fallback was used.",
+    }
+
+
+def generate_setup_randomization(group: str, current: dict[str, Any] | None = None) -> dict[str, Any]:
+    current_setup = current or {}
+    locked_fields = set(current_setup.get("_locked_fields") or [])
+    raw_locked_values = current_setup.get("_locked_values") if isinstance(current_setup.get("_locked_values"), dict) else {}
+    locked_setup = {field: raw_locked_values.get(field) for field in locked_fields if field in raw_locked_values}
+    optimize_mode = group.startswith("optimize:")
+    text_fill_mode = group.startswith("text:")
+    text_mode = optimize_mode or text_fill_mode
+
+    return_fields = _setup_randomizer_return_fields(group, current_setup, text_mode)
+    if not return_fields:
+        return {}
+    if return_fields == ["special_abilities"]:
+        field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
+        if str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").lower() == "none":
+            return {"special_abilities": []}
+
+    base_rules = [
+        "Return one JSON object only.",
+        "Do not include task, rules, return_fields, current_setup, output_shape, or placeholder values.",
+        "Do not return the current field value unchanged unless it is the only coherent option.",
+        "Only include generated values for return_fields, plus notes if useful.",
+        "Use concise values that fit form fields.",
+        "Use only the supplied setup context and broad RPG playability; do not assume a default genre, species, class, moral alignment, tragic past, hidden past, amnesia, destiny, noble bloodline, revenge motive, or combat role unless the context supports it.",
+        "Treat current_setup as the already-filled setup only. Do not use, infer, or depend on later fields that are not present in current_setup.",
+        "locked_setup contains user-locked immutable settings, including possible later fields. Use locked_setup as compatibility constraints, but never regenerate, overwrite, or return those locked fields.",
+        "Aim for a fresh playable concept with one concrete hook rather than a familiar template.",
+    ]
+    prompt: dict[str, Any]
+    if text_mode:
+        field = return_fields[0]
+        source_text = str(current_setup.get("_optimize_text") or current_setup.get(field) or "").strip()
+        user_prompt = str(current_setup.get("_user_prompt") or "").strip()[:700]
+        text_options = current_setup.get("_text_ai_options") if isinstance(current_setup.get("_text_ai_options"), dict) else {}
+        stage = str(current_setup.get("_text_ai_stage") or ("optimize" if optimize_mode else "draft"))
+        field_context = current_setup.get("_field_context") or {}
+        context_keys = [
+            "backstory_mode",
+            "world_style",
+            "magic_level",
+            "world_races",
+            "race_magic_enabled",
+            "race_magic_rarity",
+            "tech_level",
+            "tone",
+            "economy",
+            "difficulty",
+            "death_rules",
+            "narration_detail",
+            "loot_rarity",
+            "inventory_weight_limit",
+            "inventory_slot_limit",
+            "inventory_rules",
+            "leveling_system",
+            "game_system",
+            "system_style",
+            "proficiency_system",
+            "skill_levels_enabled",
+            "skill_style",
+            "proficiency_access",
+            "new_skill_frequency",
+            "xp_growth_speed",
+            "skill_growth_speed",
+            "proficiency_growth_speed",
+            "memory_policy",
+            "start_location",
+            "custom_style",
+            "race_magic_rules",
+            "race_ability_rules",
+            "npc_density",
+            "quest_style",
+            "faction_pressure",
+            "npc_stat_scaling",
+            "npc_skill_frequency",
+            "rank_scale",
+            "player_name",
+            "player_public_name",
+            "player_title",
+            "player_age",
+            "player_sex",
+            "previous_life_age",
+            "previous_life_sex",
+            "special_ability_origin",
+            "character_backstory",
+            "custom_skills",
+            "special_abilities",
+        ]
+        nearby_setup = {key: current_setup.get(key) for key in context_keys if key in current_setup}
+        optimize_notes = {
+            "character_backstory": "Keep this as concrete character history. Preserve the user's facts, but improve clarity, specificity, and playable hooks.",
+            "custom_style": "Keep this as setting constraints, themes, bans, and must-have world details.",
+            "race_magic_rules": "Keep this as clear per-race magic access rules. Preserve which races can cast, need training, or use alternate traditions.",
+            "race_ability_rules": "Keep this as clear per-race innate or learned ability rules. Preserve limits and starting strength.",
+            "custom_skills": "Keep this as comma-separated skill discovery, training limits, progression rules, or named proficiencies. Use commas between every proficiency or rule phrase. Include starting proficiencies only when the user explicitly asks for named starting skills.",
+            "ability_description": "Rewrite only the ability's immutable base description. Preserve scope and avoid adding broad new powers unless the user asked for them.",
+            "ability_prerequisites": "Rewrite only the unlock condition, training need, item, oath, event, or other prerequisite.",
+            "ability_cost": "Rewrite only the cost, cooldown, limit, injury, resource, debt, or drawback.",
+            "xp_growth_speed_note": "Rewrite only the custom XP gain rule.",
+            "skill_growth_speed_note": "Rewrite only the custom skill gain rule.",
+            "proficiency_growth_speed_note": "Rewrite only the custom proficiency gain rule.",
+        }
+        prompt = {
+            "task": f"{'Optimize the draft for' if optimize_mode else 'Write text for'} the setup field {field}.",
+            "field": field,
+            "field_label": current_setup.get("_field_label") or field,
+            "stage": stage,
+            "user_prompt": user_prompt,
+            "user_text": source_text,
+            "options": {
+                "optimize_after_draft": bool(text_options.get("optimize")),
+                "simplify_language": bool(text_options.get("simplify")),
+                "add_detail": bool(text_options.get("expand")),
+                "preserve_key_phrases": bool(text_options.get("preserve_phrases")),
+            },
+            "nearby_setup": nearby_setup,
+            "locked_setup": locked_setup,
+            "ability_context": current_setup.get("_ability_context"),
+            "field_context": field_context,
+            "field_note": optimize_notes.get(field, "Improve clarity, specificity, and usefulness while preserving the user's intent."),
+            "return_shape": {field: "generated text for this same field"},
+            "rules": base_rules
+            + [
+                "The user_prompt is the player's instruction for this exact field. Follow it directly while keeping the field type in mind.",
+                "Use field_label, field_context.related_name, and ability_context.name when present so the text fits the named thing being filled.",
+                "Preserve the user's meaning, constraints, tone, named facts, limits, costs, training paths, and boundaries unless they are contradictory.",
+                "Do not replace the idea with an unrelated random concept or generic RPG template.",
+                "If preserve_key_phrases is true, keep distinctive phrases and named terms unless the optimize pass can clearly compress them without losing meaning.",
+                "If simplify_language is true, use simpler grammar and fewer clauses without deleting important constraints.",
+                "If add_detail is true, add practical boundaries, examples, unlock paths, or scene-usable specifics that fit the user's prompt.",
+                "If optimize_after_draft is true and this is the draft stage, include the full idea and all important details; a later optimization pass may compact the wording.",
+                "If this is the optimize stage, rewrite the draft to be cleaner and tighter while preserving all important information from user_prompt and user_text. Compact phrases are allowed when meaning survives, such as changing 'unfathomed knowledge' to a precise shorter term only if it still matches the requested power.",
+                "If user_prompt and user_text are both empty, create one concise useful value for this field from nearby_setup.",
+                "Fit the field_context.max_length when supplied.",
+                "Return only the generated field value in JSON.",
+            ],
+        }
+    elif return_fields == ["player_name"]:
+        prompt = {
+            "task": "Generate one playable RPG player name without assuming a default genre.",
+            "forbidden_name": current_setup.get("player_name") or "Wanderer",
+            "context": "broad RPG character creation",
+            "return_shape": {"player_name": "new generated name"},
+            "rules": base_rules,
+        }
+    elif return_fields == ["special_abilities"]:
+        field_context = current_setup.get("_field_context") or {}
+        quantity_locked = bool(field_context.get("quantity_locked"))
+        try:
+            requested_count = max(0, min(5, int(field_context.get("requested_count") if field_context.get("requested_count") is not None else field_context.get("existing_count") or 0)))
+        except (TypeError, ValueError):
+            requested_count = 0
+        prompt = {
+            "task": "Generate setup special abilities according to ability_origin. If quantity_locked is true, generate exactly requested_count abilities; otherwise roll a fair count for the selected origin first.",
+            "ability_origin": field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none",
+            "quantity_locked": quantity_locked,
+            "requested_count": requested_count,
+            "current_setup": {
+                "player_name": current_setup.get("player_name"),
+                "player_public_name": current_setup.get("player_public_name"),
+                "player_title": current_setup.get("player_title"),
+                "player_age": current_setup.get("player_age"),
+                "player_sex": current_setup.get("player_sex"),
+                "previous_life_age": current_setup.get("previous_life_age"),
+                "previous_life_sex": current_setup.get("previous_life_sex"),
+                "special_ability_origin": current_setup.get("special_ability_origin"),
+                "backstory_mode": current_setup.get("backstory_mode"),
+                "memory_policy": current_setup.get("memory_policy"),
+                "character_backstory": current_setup.get("character_backstory"),
+                "world_style": current_setup.get("world_style"),
+                "magic_level": current_setup.get("magic_level"),
+                "world_races": current_setup.get("world_races"),
+                "race_magic_enabled": current_setup.get("race_magic_enabled"),
+                "race_magic_rules": current_setup.get("race_magic_rules"),
+                "race_ability_rules": current_setup.get("race_ability_rules"),
+                "difficulty": current_setup.get("difficulty"),
+                "death_rules": current_setup.get("death_rules"),
+                "loot_rarity": current_setup.get("loot_rarity"),
+                "inventory_weight_limit": current_setup.get("inventory_weight_limit"),
+                "inventory_slot_limit": current_setup.get("inventory_slot_limit"),
+                "inventory_rules": current_setup.get("inventory_rules"),
+                "game_system": current_setup.get("game_system"),
+                "system_style": current_setup.get("system_style"),
+                "skill_style": current_setup.get("skill_style"),
+                "custom_skills": current_setup.get("custom_skills"),
+            },
+            "locked_setup": locked_setup,
+            "return_shape": {
+                "special_abilities": [
+                    {
+                        "name": "ability name",
+                        "description": "one concrete immutable base description",
+                        "locked": False,
+                        "prerequisites": "",
+                        "cost": "no cost",
+                    }
+                ]
+            },
+            "rules": base_rules
+            + [
+                "The list may be empty if the 0 roll wins.",
+                "If ability_origin is none, return an empty special_abilities list.",
+                "If ability_origin is acquired, abilities should usually be locked or have prerequisites and feel learned, earned, trained, system-granted, event-awakened, tool-based, or recovered through play.",
+                "If ability_origin is innate, abilities should usually be usable at the start and feel inherent, inborn, inherited, racial, bodily, soul-deep, or otherwise natural to the character.",
+                "Use locked true for abilities that should exist but not be usable at the start.",
+                "Let backstory_mode and character_backstory decide whether abilities come from current race, training, former-life remnants, system awakening, vows, tools, or no special source at all.",
+                "For reincarnated or transmigrated characters, former strength may justify a locked remnant or remembered technique, but do not force former power unless the backstory supports it.",
+            ],
+        }
+        if quantity_locked:
+            prompt["rules"] = prompt["rules"] + [f"Return exactly {requested_count} special_abilities entries, no more and no fewer."]
+    elif len(return_fields) == 1:
+        field = return_fields[0]
+        field_context = current_setup.get("_field_context") or {}
+        is_multi_select = field_context.get("type") == "multi_select"
+        context_keys = [
+            "backstory_mode",
+            "world_style",
+            "magic_level",
+            "world_races",
+            "race_magic_enabled",
+            "race_magic_rarity",
+            "tech_level",
+            "tone",
+            "economy",
+            "difficulty",
+            "death_rules",
+            "narration_detail",
+            "loot_rarity",
+            "inventory_weight_limit",
+            "inventory_slot_limit",
+            "inventory_rules",
+            "leveling_system",
+            "game_system",
+            "system_style",
+            "proficiency_system",
+            "skill_levels_enabled",
+            "skill_style",
+            "proficiency_access",
+            "new_skill_frequency",
+            "xp_growth_speed",
+            "skill_growth_speed",
+            "proficiency_growth_speed",
+            "memory_policy",
+            "start_location",
+            "custom_style",
+            "race_magic_rules",
+            "race_ability_rules",
+            "npc_density",
+            "quest_style",
+            "faction_pressure",
+            "npc_stat_scaling",
+            "npc_skill_frequency",
+            "rank_scale",
+            "player_name",
+            "player_public_name",
+            "player_title",
+            "player_age",
+            "player_sex",
+            "previous_life_age",
+            "previous_life_sex",
+            "character_backstory",
+            "custom_skills",
+            "special_abilities",
+        ]
+        nearby_setup = {key: current_setup.get(key) for key in context_keys if key in current_setup and key != field}
+        field_notes = {
+            "player_public_name": "Usually return a blank string. Generate an alias, public name, or nickname only when character_backstory and backstory_mode make it useful, such as a reincarnated former identity, a hidden local alias, a nameless drifter's handle, or a name NPCs would plausibly know.",
+            "player_title": "Usually return a blank string. Generate a concise title or epithet only when character_backstory and backstory_mode justify reputation, former status, high power, formal office, infamous deeds, reincarnation from strength, or a title NPCs would plausibly use.",
+            "player_age": "Generate the character's current age or apparent age in this life. Text is allowed for unusual species, constructs, or immortal starts. Do not use age to force personality or stereotypes.",
+            "player_sex": "Generate a concise current biological sex or body category only as a descriptive identity fact. Blank is valid when irrelevant or unknown. Custom non-human categories are valid when the world or race rules support them.",
+            "previous_life_age": "Return a former-life remembered age only for reincarnated, transmigrated, reborn, or former-life starts. Otherwise return a blank string.",
+            "previous_life_sex": "Return a former-life remembered sex or body category only for reincarnated, transmigrated, reborn, or former-life starts. Otherwise return a blank string.",
+            "special_ability_origin": "Return one of: none, acquired, innate. Use none when special powers would overdefine the character; acquired when abilities are learned, earned, unlocked, system-granted, trained, or recovered through play; innate when abilities are inborn, inherited, racial, bodily, soul-deep, or natural to the character.",
+            "backstory_mode": "Generate one concise way the character relates to their past. Known past, ordinary remembered life, reincarnated, transmigrated, hidden past, fragmented memories, and locally known history are all valid. Do not default to tragedy, amnesia, exile, destiny, noble bloodline, revenge, or combat roles unless supported.",
+            "memory_policy": "Generate one concise memory rule. Known ordinary memory, remembered former life, partial former-life fragments, uncertain rumors, slow discovery, or a custom variant are all valid; do not force mystery unless it fits.",
+            "character_backstory": "Generate 2-4 concise sentences of actual character history, not a motto or personality trait. Include: where they were born or what world/community they came from; how they lived before the RPG starts, such as work, family, training, debts, duties, or social position; why they are near the starting point now; and, only if the backstory_mode/world_style suggests reincarnation/transmigration, whether and how they died and what they remember from the former life. Keep it playable and original, but avoid chosen-one framing, noble lineage, revenge, or a combat profession unless supported.",
+            "world_races": "Generate a concise list of common playable/encountered peoples. Include human unless the setting strongly excludes humans, and avoid overloading the world with too many races.",
+            "race_magic_rules": "Generate clear per-race magic access rules. State which races can cast, need training, have innate magic, are restricted, or use alternate magical traditions.",
+            "race_ability_rules": "Generate clear per-race non-spell ability rules. Cover innate gifts, learned racial arts, limits, and how strong they are at the start.",
+            "narration_detail": "Generate one prose-detail preference such as concise, balanced, rich, expansive, or a short custom rule for how much scene text each turn should include.",
+            "loot_rarity": "Generate one loot rarity policy. It should control how often mundane, rare, enchanted, unique, or legendary items appear.",
+            "inventory_weight_limit": "Generate a practical base carry weight limit as a number. Low-powered starts should be modest; superhuman starts can be higher if supported.",
+            "inventory_slot_limit": "Generate a practical packed inventory slot limit as a number. Backpacks and containers can change slots later, but base slots should stay understandable.",
+            "inventory_rules": "Generate concise carrying and equipment rules, including whether magic storage, backpacks, many accessories, or superhuman item quantities are common.",
+            "custom_skills": "Generate comma-separated skill discovery, training-limit, and skill-growth phrases that fit the concrete backstory, race rules, world rules, and game-system choices. Use commas between every proficiency or rule phrase. Do not assign default starting skills; include starting proficiencies only if explicitly requested or unmistakably required by the setup.",
+        }
+        prompt = {
+            "task": f"Generate one setup value for {field}.",
+            "field": field,
+            "current_value": current_setup.get(field),
+            "nearby_setup": nearby_setup,
+            "locked_setup": locked_setup,
+            "field_context": field_context,
+            "field_note": field_notes.get(field, ""),
+            "return_shape": {field: "one generated custom phrase for the Custom box" if is_multi_select else "generated value"},
+            "rules": base_rules
+            + [
+                "If field_context.random_selected is true, use field_context.selected_values as weighted inspiration, not as the final output.",
+                "For multi_select fields, always return one generated custom phrase. Do not return existing option labels as the final value.",
+                "For multi_select fields, checked options are weights/inspiration only. The UI will always place your result under Custom.",
+                "For world_races, include human unless the concept strongly excludes humans.",
+                "For player_public_name and player_title, blank is the normal result; only fill these rare fields when the existing backstory makes them clearly useful.",
+                "For previous_life_age and previous_life_sex, blank is the normal result unless the setup clearly includes reincarnation, transmigration, rebirth, or remembered former life.",
+                "For special_ability_origin, return exactly one of none, acquired, or innate.",
+            ],
+        }
+    else:
+        prompt_current_setup = current_setup
+        if group == "character":
+            prompt_current_setup = {
+                "player_name": current_setup.get("player_name"),
+                "player_public_name": current_setup.get("player_public_name"),
+                "player_title": current_setup.get("player_title"),
+                "player_age": current_setup.get("player_age"),
+                "player_sex": current_setup.get("player_sex"),
+                "previous_life_age": current_setup.get("previous_life_age"),
+                "previous_life_sex": current_setup.get("previous_life_sex"),
+                "special_ability_origin": current_setup.get("special_ability_origin"),
+                "backstory_mode": current_setup.get("backstory_mode"),
+                "memory_policy": current_setup.get("memory_policy"),
+                "character_backstory": current_setup.get("character_backstory"),
+                "special_abilities": current_setup.get("special_abilities"),
+            }
+        prompt = {
+            "task": "Generate playable setup values for an endless AI RPG. Return the generated JSON object only.",
+            "group": group,
+            "current_setup": prompt_current_setup,
+            "locked_setup": locked_setup,
+            "return_fields": return_fields,
+            "character_identity_rules": [
+                "player_public_name is rare. Leave it blank by default; fill it only when the backstory implies an alias, public handle, former-world name, or name strangers would plausibly know.",
+                "player_title is rare. Leave it blank by default; fill it only when reputation, formal office, reincarnated former power, high strength, infamous deeds, or local rumors make a title more playable.",
+                "player_age and player_sex are current-life descriptive identity fields. Keep them concise, and do not make them behavior constraints or stereotypes.",
+                "previous_life_age and previous_life_sex are only for reincarnated, transmigrated, reborn, or former-life starts. Leave them blank for ordinary known, hidden, or nameless starts without former-life memory.",
+                "Backstory mode affects both optional identity fields: reincarnated/transmigrated characters may carry former-world names or former-rank titles, while hidden/amnesia/nameless starts often stay blank unless the backstory gives NPC-facing clues.",
+                "backstory_mode and memory_policy describe how much of the past matters at the start without forcing mystery, trauma, or amnesia.",
+                "character_backstory should be 2-4 concise sentences with concrete origin details: birthplace/original world, former livelihood or role, important ties/debts/duties, why the character is at the opening, and death/reincarnation details only when fitting.",
+                "custom_skills and special_abilities should fit the concrete backstory, race rules, world rules, and any optional identity fields already generated.",
+                "custom_skills must be one comma-separated string when present; never use bullets or newlines for proficiencies.",
+                "special_ability_origin controls ability generation: none should prevent setup abilities, acquired should lean toward future unlocked or earned abilities, and innate should lean toward inherent starting abilities.",
+            ],
+            "rules": base_rules + ["Generate fields one at a time in the order requested. Later fields must fit earlier current_setup values."],
+        }
+    if text_mode:
+        source_length = len(str(current_setup.get("_optimize_text") or ""))
+        prompt_length = len(str(current_setup.get("_user_prompt") or ""))
+        token_cap = max(220, min(620, (source_length + prompt_length) // 3 + 180))
+    elif return_fields == ["player_name"]:
+        token_cap = 80
+    elif return_fields == ["special_abilities"]:
+        token_cap = 420
+    elif not text_mode and return_fields == ["character_backstory"]:
+        token_cap = 360
+    elif not text_mode and len(return_fields) == 1:
+        token_cap = 180
+    else:
+        token_cap = _env_int("AI_RPG_RANDOMIZER_TOKENS", 520)
+
+    result = _chat_json(
+        "Return JSON only. Generate direct values. Do not explain. Do not echo the request.",
+        json.dumps(prompt, ensure_ascii=True),
+        timeout=_model_timeout(45, 240, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+        phase="setup_randomize",
+        max_tokens=token_cap,
+    )
+    validated = _validate_setup_randomization(group, result)
+    if not text_mode and return_fields == ["player_name"]:
+        current_name = str(current_setup.get("player_name") or "").strip().lower()
+        generated_name = str(validated.get("player_name") or "").strip().lower()
+        if current_name and generated_name == current_name:
+            retry_prompt = {
+                "task": "Generate one new playable RPG player name.",
+                "forbidden_name": current_setup.get("player_name"),
+                "return_shape": {"player_name": "new name that is not the forbidden_name"},
+            }
+            validated = _validate_setup_randomization(
+                group,
+                _chat_json(
+                    "Return JSON only. Create a different name. Do not explain.",
+                    json.dumps(retry_prompt, ensure_ascii=True),
+                    timeout=_model_timeout(30, 120, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+                    phase="setup_randomize_name_retry",
+                    max_tokens=80,
+                ),
+            )
+    elif not text_mode and return_fields == ["character_backstory"]:
+        generated_backstory = str(validated.get("character_backstory") or "").strip()
+        if _backstory_is_too_vague(generated_backstory):
+            retry_prompt = {
+                "task": "Regenerate the character backstory as concrete RPG setup history.",
+                "rejected_backstory": generated_backstory,
+                "nearby_setup": prompt.get("nearby_setup") if isinstance(prompt, dict) else current_setup,
+                "return_shape": {"character_backstory": "2-4 concise sentences of concrete history"},
+                "required_details": [
+                    "birthplace, original world, or home community",
+                    "how the character lived before play: work, training, family, duties, debts, or social position",
+                    "why the character is at or near the starting point now",
+                    "death and reincarnation/transmigration details only if the setup calls for them",
+                ],
+                "rules": [
+                    "Do not return a motto, personality trait, vague lesson, or single aphorism.",
+                    "Keep it playable and leave room for discovery.",
+                ],
+            }
+            validated = _validate_setup_randomization(
+                group,
+                _chat_json(
+                    "Return JSON only. Create concrete character history, not a vague hook.",
+                    json.dumps(retry_prompt, ensure_ascii=True),
+                    timeout=_model_timeout(30, 180, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+                    phase="setup_randomize_backstory_retry",
+                    max_tokens=360,
+                ),
+            )
+    elif not text_mode and len(return_fields) == 1:
+        field = return_fields[0]
+        field_context = current_setup.get("_field_context") or {}
+        if field_context.get("random_selected"):
+            selected = [str(value).strip() for value in field_context.get("selected_values") or [] if str(value).strip()]
+            selected_joined = ", ".join(selected).lower()
+            current_value = str(current_setup.get(field) or "").strip().lower()
+            generated_raw = validated.get(field)
+            if isinstance(generated_raw, list):
+                generated_value = ", ".join(str(value).strip() for value in generated_raw if str(value).strip()).lower()
+            else:
+                generated_value = str(generated_raw or "").strip().lower()
+            if generated_value and generated_value in {selected_joined, current_value}:
+                retry_prompt = {
+                    "task": f"Create one generated custom setup value for {field}.",
+                    "selected_weights": selected,
+                    "world_style": current_setup.get("world_style"),
+                    "rule": "Use selected_weights as inspiration, but do not return the weights unchanged. Combine, expand, or reinterpret them into one coherent setting phrase.",
+                    "return_shape": {field: "generated custom value"},
+                }
+                validated = _validate_setup_randomization(
+                    group,
+                    _chat_json(
+                        "Return JSON only. Create a generated custom value, not the selected option list.",
+                        json.dumps(retry_prompt, ensure_ascii=True),
+                        timeout=_model_timeout(30, 120, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+                        phase="setup_randomize_weight_retry",
+                        max_tokens=min(token_cap, 180),
+                    ),
+                )
+    normalized = _normalize_previous_life_identity_fields(return_fields, current_setup, validated)
+    normalized = _thin_optional_identity_fields(return_fields, current_setup, normalized)
+    if "custom_skills" in normalized:
+        normalized["custom_skills"] = _comma_separated_phrases(normalized.get("custom_skills"))
+    return normalized
+
+
+def _thin_optional_identity_fields(return_fields: list[str], current_setup: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    next_result = dict(result)
+    requested_fields = set(return_fields)
+    for field in OPTIONAL_IDENTITY_FIELDS.intersection(next_result).intersection(requested_fields):
+        value = str(next_result.get(field) or "").strip()
+        if not value:
+            next_result[field] = ""
+            continue
+        if random.random() > _optional_identity_fill_chance(field, current_setup):
+            next_result[field] = ""
+        else:
+            next_result[field] = value
+    return next_result
+
+
+def _normalize_previous_life_identity_fields(return_fields: list[str], current_setup: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    next_result = dict(result)
+    requested_fields = set(return_fields)
+    if _setup_has_former_life_identity({**current_setup, **next_result}):
+        for field in PREVIOUS_LIFE_IDENTITY_FIELDS.intersection(next_result).intersection(requested_fields):
+            next_result[field] = str(next_result.get(field) or "").strip()
+        return next_result
+    for field in PREVIOUS_LIFE_IDENTITY_FIELDS.intersection(requested_fields):
+        next_result[field] = ""
+    return next_result
+
+
+def _setup_has_former_life_identity(setup: dict[str, Any]) -> bool:
+    context_text = " ".join(
+        str(setup.get(key) or "")
+        for key in ("backstory_mode", "memory_policy", "character_backstory")
+    ).lower()
+    return any(marker in context_text for marker in ("reincarnated", "transmigrated", "former life", "former-life", "reborn"))
+
+
+def _optional_identity_fill_chance(field: str, current_setup: dict[str, Any]) -> float:
+    backstory_mode = str(current_setup.get("backstory_mode") or "").lower()
+    memory_policy = str(current_setup.get("memory_policy") or "").lower()
+    backstory = str(current_setup.get("character_backstory") or "").lower()
+    context_text = " ".join([backstory_mode, memory_policy, backstory])
+    chance = 0.22 if field == "player_public_name" else 0.14
+
+    if any(marker in context_text for marker in ("reincarnated", "transmigrated", "former life", "another world", "reborn")):
+        chance += 0.12 if field == "player_public_name" else 0.16
+    if any(marker in context_text for marker in ("hidden", "amnesia", "fragment", "nameless", "unknown")):
+        chance += 0.10 if field == "player_public_name" else 0.06
+
+    if field == "player_public_name":
+        alias_markers = ("known as", "called", "alias", "nickname", "public name", "handle", "street name", "false name")
+        if any(marker in context_text for marker in alias_markers):
+            chance += 0.24
+    else:
+        title_markers = (
+            "title",
+            "rank",
+            "emperor",
+            "empress",
+            "king",
+            "queen",
+            "lord",
+            "lady",
+            "general",
+            "commander",
+            "champion",
+            "hero",
+            "saint",
+            "archmage",
+            "sect master",
+            "elder",
+            "ascendant",
+            "s-rank",
+            "mythic",
+        )
+        if any(marker in context_text for marker in title_markers):
+            chance += 0.32
+
+    return min(chance, 0.68)
+
+
+def _backstory_is_too_vague(backstory: str) -> bool:
+    text = backstory.strip().lower()
+    if len(text) < 140:
+        return True
+    origin_markers = {
+        "born",
+        "raised",
+        "grew up",
+        "from ",
+        "village",
+        "town",
+        "city",
+        "district",
+        "settlement",
+        "world",
+        "former life",
+        "woke",
+        "reincarnated",
+        "transmigrated",
+    }
+    life_markers = {
+        "worked",
+        "trained",
+        "apprentice",
+        "family",
+        "parent",
+        "crew",
+        "guild",
+        "duty",
+        "debt",
+        "job",
+        "trade",
+        "lived",
+        "served",
+        "studied",
+        "kept",
+        "career",
+        "profession",
+        "technician",
+        "student",
+        "office",
+        "years as",
+        "spent years",
+    }
+    transition_markers = {"arrived", "left", "sent", "reached", "came", "fled", "returned", "woke", "now"}
+    has_origin = any(marker in text for marker in origin_markers)
+    has_prior_life = any(marker in text for marker in life_markers)
+    has_transition = any(marker in text for marker in transition_markers)
+    return not (has_origin and has_prior_life and has_transition)
+
+
+def _validate_setup_randomization(group: str, result: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise LlmError("Randomizer returned a non-object JSON value.")
+
+    echoed_prompt_keys = {"task", "allowed_groups", "output_shape", "rules", "current_setup", "locked_setup", "return_fields"}
+    if len(echoed_prompt_keys.intersection(result)) >= 2:
+        raise LlmError("Randomizer echoed the setup schema instead of generating playable values.")
+
+    placeholder_values = {
+        "string",
+        "boolean",
+        "string or comma-separated list",
+        "immutable base description",
+        "no cost/model decides/custom cost text",
+    }
+    generated_keys = {
+        key
+        for key, value in result.items()
+        if key not in {"notes", "locked_setup", "current_setup", "return_fields", "rules", "task"}
+        and value not in (None, "", [], {})
+        and str(value).strip().lower() not in placeholder_values
+    }
+    requested_field = group.split(":", 1)[1] if group.startswith(("field:", "optimize:", "text:")) else ""
+    if requested_field in OPTIONAL_IDENTITY_FIELDS and requested_field in result:
+        generated_keys.add(requested_field)
+    if requested_field == "special_abilities" and "special_abilities" in result:
+        generated_keys.add("special_abilities")
+    if not generated_keys:
+        raise LlmError("Randomizer returned no usable setup values.")
+
+    if group.startswith(("field:", "optimize:", "text:")):
+        requested = requested_field
+        if requested not in generated_keys:
+            raise LlmError(f"Randomizer did not return the requested field: {requested}.")
+
+    if "special_abilities" in result:
+        abilities = result["special_abilities"]
+        if not isinstance(abilities, list):
+            raise LlmError("Randomizer returned special_abilities, but it was not a list.")
+        for ability in abilities:
+            if not isinstance(ability, dict):
+                raise LlmError("Randomizer returned a malformed special ability.")
+            name = str(ability.get("name") or "").strip().lower()
+            description = str(ability.get("description") or "").strip().lower()
+            if name in placeholder_values or description in placeholder_values:
+                raise LlmError("Randomizer returned placeholder special ability values.")
+
+    if "special_ability_origin" in result:
+        origin = str(result.get("special_ability_origin") or "").strip().lower().replace("-", " ").replace("_", " ")
+        aliases = {
+            "none": "none",
+            "no abilities": "none",
+            "no special abilities": "none",
+            "gained": "acquired",
+            "acquired": "acquired",
+            "learned": "acquired",
+            "earned": "acquired",
+            "unlocked": "acquired",
+            "born with": "innate",
+            "inborn": "innate",
+            "innate": "innate",
+            "inherent": "innate",
+            "natural": "innate",
+        }
+        if origin not in aliases:
+            raise LlmError("Randomizer returned an invalid special_ability_origin.")
+        result["special_ability_origin"] = aliases[origin]
+
+    return result
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        if stripped.lower().startswith("json"):
+            stripped = stripped[4:].strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        first_object = _first_json_object(stripped)
+        if first_object:
+            return json.loads(first_object)
+        raise
+
+
+def _first_json_object(text: str) -> str:
+    start = text.find("{")
+    if start < 0:
+        return ""
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return ""
+
+
+def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
+    location = context.get("current_location", {}).get("name", "the road")
+    is_opening_scene = str(player_input).startswith("__opening_scene_request__")
+    is_continue_scene = str(player_input).startswith("__continue_scene_request__")
+    if is_opening_scene:
+        narration = (
+            f"{location} comes into focus without waiting for a command. Damp air gathers at the edges of the street, "
+            "voices move behind closed doors, and something nearby is just unresolved enough to invite a first choice. "
+            "The world offers a modest opening instead of a grand revelation: listen, approach, investigate, or move on."
+        )
+        event_summary = f"The opening scene settled around {location} before the player acted."
+        event_title = "Opening scene"
+        turn_summary = f"opening: established the first playable moment at {location}."
+        journal_content = event_summary
+    elif is_continue_scene:
+        narration = (
+            f"The moment in {location} keeps moving. A nearby sound sharpens, someone shifts where they thought they were hidden, "
+            "and the scene offers a little more shape without forcing your hand. You still have room to approach, wait, speak, investigate, or walk away."
+        )
+        event_summary = f"The scene at {location} advanced slightly while the player waited for more context."
+        event_title = "Scene pressure"
+        turn_summary = f"continue: advanced the current scene around {location} without a player action."
+        journal_content = event_summary
+    else:
+        narration = (
+            f"You take a careful moment in {location}. The world does not leap to answer all at once: "
+            "someone coughs behind a shutter, damp air clings to your sleeves, and your last choice hangs in the street.\n\n"
+            f"Your intent was clear: {player_input}. For now, the place gives you a small opening rather than a grand revelation."
+        )
+        event_summary = f"The player paused to act deliberately: {player_input}"
+        event_title = "A cautious pause"
+        turn_summary = f"player: acted cautiously in current location. response: fallback pause around {location}."
+        journal_content = f"The player acted in {location}: {player_input}"
+    return {
+        "scene_plan": {
+            "goal": "Keep the current location playable without forcing a player action.",
+            "focus_points": [
+                {
+                    "kind": "location",
+                    "summary": f"Ground the scene around {location} with one immediate choice opening.",
+                    "event_worthy": False,
+                    "persistence": "temporary",
+                }
+            ],
+        },
+        "narration_segments": [{"label": "fallback", "text": narration}],
+        "narration": narration,
+        "player": {
+            "health_delta": 0,
+            "max_health_delta": 0,
+            "xp_delta": 0,
+            "gold_delta": 0,
+            "level_delta": 0,
+            "move_to_location": None,
+            "move_to_location_code": None,
+            "karma_delta": 0,
+            "karma_reason": "",
+            "karma_visibility": "private",
+        },
+        "inventory_changes": [],
+        "skill_changes": [],
+        "locations": [],
+        "npcs": [],
+        "relationships": [],
+        "events": [
+            {
+                "title": event_title,
+                "location": location,
+                "summary": event_summary,
+                "status": "background",
+                "persistence": "background",
+                "disappear_chance": 0,
+                "respawn_chance": 0,
+            }
+        ],
+        "conversations": [],
+        "response_drafts": [],
+        "index_updates": [],
+        "gm_events": [],
+        "self_check": {
+            "passed": True,
+            "issues_found": [],
+            "corrections_made": [],
+            "reference_check": "Fallback used no indexed references.",
+            "consistency_check": "Fallback does not alter player state.",
+        },
+        "turn_summary": turn_summary,
+        "journal": [{"kind": "event", "content": journal_content}],
+        "scene_focus": "filler",
+    }
+
+
+def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -> dict[str, Any]:
+    settings = context.get("settings") or {}
+    suggestion_instruction = str(instruction or "").strip()[:500]
+    compact_context = {
+        "settings": {
+            "setup_complete": settings.get("setup_complete"),
+            "playthrough_options": settings.get("playthrough_options"),
+        },
+        "player": context.get("player"),
+        "active_player_alias": context.get("active_player_alias"),
+        "current_location": context.get("current_location"),
+        "skills": context.get("skills"),
+        "abilities": context.get("abilities"),
+        "inventory": context.get("inventory"),
+        "equipment_slots": context.get("equipment_slots"),
+        "inventory_capacity_modifiers": context.get("inventory_capacity_modifiers"),
+        "inventory_summary": context.get("inventory_summary"),
+        "locations": context.get("locations", [])[:4],
+        "events": context.get("events", [])[:8],
+        "conversations": context.get("conversations", [])[:6],
+        "relevant_sources": context.get("relevant_sources", [])[:6],
+        "turn_summaries": context.get("turn_summaries", [])[:6],
+    }
+    prompt = {
+        "task": "Generate exactly 3 recommended player inputs for the next RPG turn.",
+        "world_state": compact_context,
+        "user_instruction": suggestion_instruction,
+        "return_shape": {"suggestions": ["player input option", "player input option", "player input option"]},
+        "rules": [
+            "Return JSON only.",
+            "Each suggestion must be a direct action or spoken intent the player could submit next.",
+            "If user_instruction is present, use it to steer the suggestions while staying consistent with the scene.",
+            "Use the current scene and known indexed facts; do not reveal hidden information or future outcomes.",
+            "Do not continue the story, narrate results, or decide that the player already chose an option.",
+            "Keep each suggestion concise, specific, and playable, usually 4-18 words.",
+            "Offer meaningfully different approaches such as cautious, social, investigative, practical, risky, or evasive when they fit.",
+        ],
+    }
+    result = _chat_json(
+        "Return JSON only. Create concise RPG player input suggestions. Do not explain.",
+        json.dumps(prompt, ensure_ascii=True),
+        timeout=_model_timeout(45, 240, "AI_RPG_SUGGESTION_TIMEOUT"),
+        phase="input_suggestions",
+        max_tokens=_env_int("AI_RPG_SUGGESTION_TOKENS", 220),
+    )
+    raw_suggestions = result.get("suggestions") or result.get("options") or []
+    suggestions: list[str] = []
+    if isinstance(raw_suggestions, list):
+        for item in raw_suggestions:
+            if isinstance(item, dict):
+                text = str(item.get("text") or item.get("input") or item.get("suggestion") or "").strip()
+            else:
+                text = str(item or "").strip()
+            text = text.strip("-0123456789. )\t")[:180]
+            if text and text not in suggestions:
+                suggestions.append(text)
+            if len(suggestions) == 3:
+                break
+    if len(suggestions) != 3:
+        raise LlmError("Model did not return exactly 3 usable input suggestions.")
+    return {"suggestions": suggestions}
+
+
+def estimated_tokens(text: str) -> int:
+    return max(1, (len(text) + 3) // 4)
+
+
+def _turn_token_default(context: dict[str, Any], phase: str) -> int:
+    options = (context.get("settings") or {}).get("playthrough_options") or {}
+    detail = str(options.get("narration_detail") or "rich").strip().lower()
+    draft_defaults = {
+        "concise": 900,
+        "balanced": DEFAULT_RESPONSE_TOKEN_CAP,
+        "rich": 1700,
+        "expansive": 2400,
+    }
+    verify_defaults = {
+        "concise": 700,
+        "balanced": 950,
+        "rich": 1300,
+        "expansive": 1800,
+    }
+    defaults = verify_defaults if phase == "verify" else draft_defaults
+    return defaults.get(detail, defaults["rich"])
+
+
+def _chat_json(
+    system_prompt: str,
+    user_prompt: str,
+    timeout: int = 90,
+    usage: list[dict[str, Any]] | None = None,
+    phase: str = "draft",
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    if usage is not None:
+        total = f"{system_prompt}\n{user_prompt}"
+        usage.append({"phase": phase, "chars": len(total), "estimated_tokens": estimated_tokens(total)})
+    try:
+        content = _chat_content(system_prompt, user_prompt, timeout=timeout, max_tokens=max_tokens)
+    except LlmError as exc:
+        total = f"{system_prompt}\n{user_prompt}"
+        config = get_model_config()
+        response_cap = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
+        _, hard_cap = _response_token_settings(config)
+        reason = _transport_error_message(exc, timeout)
+        raise LlmError(f"{phase} {reason} (prompt ~{estimated_tokens(total)} tokens, response cap {response_cap}, hard cap {hard_cap})") from exc
+    try:
+        return _extract_json(content)
+    except json.JSONDecodeError:
+        config = get_model_config()
+        repair_tokens = _json_repair_token_cap(config, max_tokens)
+        _, hard_cap = _response_token_settings(config)
+        repair_system_prompt = "Return valid JSON only. Repair the malformed JSON without adding new content."
+        repair_user_prompt = json.dumps({"malformed": content}, ensure_ascii=True)
+        repair_timeout = _model_timeout(45, 120, "AI_RPG_JSON_REPAIR_TIMEOUT")
+        try:
+            repaired = _chat_content(
+                repair_system_prompt,
+                repair_user_prompt,
+                timeout=repair_timeout,
+                temperature=0.0,
+                max_tokens=repair_tokens,
+            )
+        except LlmError as repair_exc:
+            total = f"{repair_system_prompt}\n{repair_user_prompt}"
+            raise LlmError(f"{phase}_repair {_transport_error_message(repair_exc, repair_timeout)} (prompt ~{estimated_tokens(total)} tokens, response cap {repair_tokens}, hard cap {hard_cap})") from repair_exc
+        if usage is not None:
+            total = f"Return valid JSON only. Repair the malformed JSON without adding new content.\n{content}"
+            usage.append({"phase": f"{phase}_repair", "chars": len(total), "estimated_tokens": estimated_tokens(total)})
+        try:
+            return _extract_json(repaired)
+        except json.JSONDecodeError as exc:
+            raise LlmError(f"Could not parse or repair model JSON: {exc}") from exc
+
+
+def _chat_content(
+    system_prompt: str,
+    user_prompt: str,
+    timeout: int = 90,
+    temperature: float = 0.75,
+    max_tokens: int | None = None,
+) -> str:
+    config = get_model_config()
+    response_tokens = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
+    if config.get("provider") == "llama_cpp":
+        return _chat_content_openai_compatible(config, system_prompt, user_prompt, timeout, temperature, response_tokens)
+
+    base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
+    model = str(config.get("ollama_model") or "llama3.1")
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {
+            "temperature": temperature,
+            "top_p": 0.9,
+            "num_ctx": context_window_tokens(config),
+            "num_predict": response_tokens,
+        },
+    }
+
+    req = urllib.request.Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise LlmError(f"HTTP {exc.code}: {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise LlmError(_transport_error_message(exc, timeout)) from exc
+
+    content = payload.get("message", {}).get("content", "")
+    if not content:
+        raise LlmError("Ollama returned an empty response.")
+    return content
+
+
+def _chat_content_openai_compatible(
+    config: dict[str, Any],
+    system_prompt: str,
+    user_prompt: str,
+    timeout: int,
+    temperature: float,
+    max_tokens: int | None = None,
+) -> str:
+    base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
+    model = str(config.get("model") or "ai-rpg-local")
+    if os.getenv("AI_RPG_LLAMA_CPP_CHAT_COMPLETIONS", "1").strip().lower() not in {"1", "true", "yes"}:
+        prompt = (
+            "System:\n"
+            f"{system_prompt.strip()}\n\n"
+            "User:\n"
+            f"{user_prompt.strip()}\n\n"
+            "Return exactly one compact JSON object. Do not include markdown, comments, explanations, or additional JSON objects.\n"
+            "JSON:\n"
+        )
+        body = {
+            "model": model,
+            "prompt": prompt,
+            "temperature": temperature,
+            "top_p": 0.9,
+            "max_tokens": max_tokens or _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
+            "stream": False,
+            "stop": ["<|im_end|>"],
+        }
+        req = urllib.request.Request(
+            f"{base_url}/v1/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise LlmError(f"HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise LlmError(_transport_error_message(exc, timeout)) from exc
+        content = payload.get("choices", [{}])[0].get("text", "")
+        if not content:
+            raise LlmError("llama.cpp compatible server returned an empty response.")
+        return content
+
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "top_p": 0.9,
+        "max_tokens": max_tokens or _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
+        "stream": False,
+        "stop": ["<|im_end|>"],
+    }
+    if os.getenv("AI_RPG_LLAMA_CPP_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes"}:
+        body["response_format"] = {"type": "json_object"}
+    req = urllib.request.Request(
+        f"{base_url}/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise LlmError(f"HTTP {exc.code}: {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise LlmError(_transport_error_message(exc, timeout)) from exc
+
+    content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not content:
+        raise LlmError("llama.cpp compatible server returned an empty response.")
+    return content
+
+
+def _turn_payload(result: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise LlmError("Model returned a non-object turn JSON value.")
+    for key in TURN_WRAPPER_KEYS:
+        wrapped = result.get(key)
+        if isinstance(wrapped, dict) and TURN_SHAPE_KEYS.intersection(wrapped):
+            outer = {outer_key: outer_value for outer_key, outer_value in result.items() if outer_key not in TURN_WRAPPER_KEYS}
+            return {**outer, **wrapped}
+    return dict(result)
+
+
+def _narration_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n\n".join(_narration_value_text(item) for item in value).strip()
+    if isinstance(value, dict):
+        for key in TURN_SEGMENT_TEXT_KEYS:
+            text = _narration_value_text(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _segment_label(segment: dict[str, Any], fallback: str) -> str:
+    for key in TURN_SEGMENT_LABEL_KEYS:
+        label = str(segment.get(key) or "").strip()
+        if label:
+            return label
+    return fallback
+
+
+def _segment_text(segment: dict[str, Any]) -> str:
+    for key in TURN_SEGMENT_TEXT_KEYS:
+        text = _narration_value_text(segment.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _coerce_segments(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        if any(key in value for key in TURN_SEGMENT_TEXT_KEYS):
+            return [value]
+        return [{"label": key, "text": item} for key, item in value.items()]
+    text = _narration_value_text(value)
+    return [text] if text else []
+
+
+def _narration_segments_from_result(result: dict[str, Any]) -> list[Any]:
+    for key in TURN_SEGMENT_KEYS:
+        segments = _coerce_segments(result.get(key))
+        if segments:
+            return segments
+    for key in TURN_NARRATION_KEYS:
+        text = _narration_value_text(result.get(key))
+        if text:
+            return [{"label": "scene", "text": text}]
+    return []
+
+
+def _is_missing_narration_error(exc: Exception) -> bool:
+    return MISSING_NARRATION_MESSAGE.lower() in str(exc).lower()
+
+
+def _normalize_turn(result: dict[str, Any]) -> dict[str, Any]:
+    result = _turn_payload(result)
+    segments = _narration_segments_from_result(result)
+    result["narration_segments"] = segments
+    normalized_segments: list[dict[str, str]] = []
+    for index, segment in enumerate(segments):
+        if isinstance(segment, dict):
+            text = _segment_text(segment)
+            label = _segment_label(segment, "scene" if index == 0 else "result")
+        else:
+            text = _narration_value_text(segment)
+            label = "scene" if index == 0 else "result"
+        if text:
+            normalized_segments.append({"label": label[:40], "text": text})
+    result["narration_segments"] = normalized_segments
+    joined = "\n\n".join(segment["text"] for segment in normalized_segments).strip()
+    if joined:
+        result["narration"] = joined[:5600]
+    else:
+        raise LlmError(MISSING_NARRATION_MESSAGE)
+    if "self_check" not in result:
+        result["self_check"] = {
+            "passed": False,
+            "issues_found": ["Verifier did not return self_check."],
+            "corrections_made": [],
+            "reference_check": "unknown",
+            "consistency_check": "unknown",
+        }
+    result.setdefault("index_updates", [])
+    result.setdefault("turn_summary", "")
+    return result
+
+
+def _merge_verified_with_draft_narration(verified: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    merged = {**draft, **_turn_payload(verified)}
+    merged["narration_segments"] = draft.get("narration_segments") or []
+    merged["narration"] = draft.get("narration") or ""
+    if not merged.get("turn_summary"):
+        merged["turn_summary"] = draft.get("turn_summary") or ""
+    return _normalize_turn(merged)
+
+
+def _retry_missing_narration(
+    context: dict[str, Any],
+    player_input: str,
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+) -> dict[str, Any]:
+    prompt = {
+        "repair_task": "The previous turn JSON had no usable narration. Return a complete turn JSON with narration_segments containing playable prose.",
+        "world_turn_prompt": json.loads(build_user_prompt(_compact_turn_context(context), player_input)),
+        "rules": [
+            "Return JSON only.",
+            "Include narration_segments with at least one object whose text is non-empty.",
+            "Include scene_plan with 1-6 focus_points plus player, self_check, turn_summary, and scene_focus.",
+            "For opening_scene or continue_scene, do not invent a player action.",
+        ],
+    }
+    return _chat_json(
+        system_prompt,
+        json.dumps(prompt, ensure_ascii=True, separators=(",", ":")),
+        timeout=timeout,
+        usage=usage,
+        phase=phase,
+        max_tokens=_turn_max_tokens(context, "draft", compact=True),
+    )
+
+
+def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
+    usage: list[dict[str, Any]] = []
+    timeout = _model_timeout(90, 900, "AI_RPG_TURN_DRAFT_TIMEOUT")
+    verify_timeout = _model_timeout(45, 480, "AI_RPG_TURN_VERIFY_TIMEOUT")
+    config = get_model_config()
+    system_prompt = COMPACT_SYSTEM_PROMPT if config.get("provider") == "llama_cpp" else SYSTEM_PROMPT
+    verify_prompt = COMPACT_VERIFY_PROMPT if config.get("provider") == "llama_cpp" else VERIFY_PROMPT
+    active_context = context
+    draft_prompt = build_user_prompt(active_context, player_input)
+    try:
+        draft = _chat_json(
+            system_prompt,
+            draft_prompt,
+            timeout=timeout,
+            usage=usage,
+            phase="draft",
+            max_tokens=_turn_max_tokens(active_context, "draft"),
+        )
+    except LlmError as exc:
+        if _is_timeout_error(exc):
+            raise _attach_model_usage(exc, usage)
+        if _is_context_length_error(exc):
+            active_context = _compact_turn_context(context)
+            try:
+                draft = _chat_json(
+                    system_prompt,
+                    build_user_prompt(active_context, player_input),
+                    timeout=timeout,
+                    usage=usage,
+                    phase="draft_compact_retry",
+                    max_tokens=_turn_max_tokens(active_context, "draft", compact=True),
+                )
+            except LlmError as retry_exc:
+                    raise _attach_model_usage(retry_exc, usage)
+        else:
+            try:
+                draft = _chat_json(
+                    system_prompt,
+                    draft_prompt,
+                    timeout=timeout,
+                    usage=usage,
+                    phase="draft_retry",
+                    max_tokens=_turn_max_tokens(active_context, "draft"),
+                )
+            except LlmError as retry_exc:
+                    raise _attach_model_usage(retry_exc, usage)
+    try:
+        draft = _normalize_turn(draft)
+    except LlmError as exc:
+        if not _is_missing_narration_error(exc):
+            raise _attach_model_usage(exc, usage)
+        try:
+            draft = _normalize_turn(
+                _retry_missing_narration(
+                    active_context,
+                    player_input,
+                    system_prompt,
+                    timeout,
+                    usage,
+                    "draft_missing_narration_retry",
+                )
+            )
+        except LlmError as retry_exc:
+            raise _attach_model_usage(retry_exc, usage)
+    try:
+        verified = _chat_json(
+            verify_prompt,
+            build_verify_prompt(active_context, player_input, draft),
+            timeout=verify_timeout,
+            usage=usage,
+            phase="verify",
+            max_tokens=_turn_max_tokens(active_context, "verify"),
+        )
+        try:
+            result = _normalize_turn(verified)
+        except LlmError as exc:
+            if not _is_missing_narration_error(exc):
+                raise
+            result = _merge_verified_with_draft_narration(verified, draft)
+        result["_model_usage"] = usage
+        return result
+    except LlmError as exc:
+        if _is_context_length_error(exc):
+            try:
+                compact_context = _compact_turn_context(active_context)
+                verified = _chat_json(
+                    verify_prompt,
+                    build_verify_prompt(compact_context, player_input, draft),
+                    timeout=verify_timeout,
+                    usage=usage,
+                    phase="verify_compact_retry",
+                    max_tokens=_turn_max_tokens(compact_context, "verify", compact=True),
+                )
+                try:
+                    result = _normalize_turn(verified)
+                except LlmError as verify_exc:
+                    if not _is_missing_narration_error(verify_exc):
+                        raise
+                    result = _merge_verified_with_draft_narration(verified, draft)
+                result["_model_usage"] = usage
+                return result
+            except LlmError:
+                pass
+        draft = _normalize_turn(draft)
+        draft["self_check"] = {
+            "passed": False,
+            "issues_found": ["Verifier pass failed; using draft."],
+            "corrections_made": [],
+            "reference_check": "not verified",
+            "consistency_check": "not verified",
+        }
+        draft["_model_usage"] = usage
+        return draft

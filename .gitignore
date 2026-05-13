@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/
+.env
+temp_*/
+temp_*.db
+temp_*.jsonl
+tmp_*.ps1
+*_check.txt
+diff_*.txt

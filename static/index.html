@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI RPG</title>
+    <link rel="stylesheet" href="/static/styles.css?v=v0-6-0" />
+  </head>
+  <body>
+    <main class="app">
+      <input id="modelModalToggle" class="modalToggle" type="checkbox" aria-hidden="true" />
+      <section id="startSplash" class="startSplash hidden" aria-live="polite" aria-busy="true">
+        <div class="startSplashPanel">
+          <p class="startSplashEyebrow">local model</p>
+          <h1>Starting playthrough</h1>
+          <div id="startSplashLog" class="startSplashLog"></div>
+          <div id="startSplashDraft" class="startSplashDraft" aria-label="Opening scene preview"></div>
+        </div>
+      </section>
+      <section id="setupView" class="setupView">
+        <form id="setupForm" class="setupPanel">
+          <header class="setupHeader">
+            <div>
+              <h1>AI RPG</h1>
+              <p>Build the parts you care about, or roll a playable start.</p>
+            </div>
+            <div class="setupActions">
+              <label id="setupModelButton" class="buttonLike secondaryButton" for="modelModalToggle">LLM Settings</label>
+              <button id="saveSetupSettings" class="secondaryButton" type="button">Save Settings</button>
+              <label id="loadSetupSettingsButton" class="buttonLike secondaryButton" for="setupSettingsFile">Load Settings</label>
+              <input id="setupSettingsFile" class="hidden" type="file" accept="application/json,.json" />
+              <button id="randomizeSetup" class="secondaryButton" type="button">Randomize</button>
+              <button id="setupStart" type="submit">Start</button>
+            </div>
+          </header>
+
+          <nav class="setupSteps" aria-label="Setup steps">
+            <button class="active" data-setup-step="0" type="button">1 Character</button>
+            <button data-setup-step="1" type="button">2 World</button>
+            <button data-setup-step="2" type="button">3 People</button>
+            <button data-setup-step="3" type="button">4 Rules</button>
+          </nav>
+
+          <div class="setupSections">
+            <section class="setupSection active" data-step="0">
+              <header class="sectionHeader">
+                <div>
+                  <h2>Character</h2>
+                  <p>Name and optional starting abilities.</p>
+                </div>
+                <button class="secondaryButton" data-randomize-group="character" type="button">Randomize Character</button>
+              </header>
+              <div class="setupGrid">
+                <label>
+                  <span>Name</span>
+                  <input name="player_name" value="Wanderer" maxlength="80" />
+                </label>
+
+                <label>
+                  <span>Known As</span>
+                  <input name="player_public_name" value="" maxlength="100" placeholder="Optional public name, nickname, or alias" />
+                </label>
+
+                <label>
+                  <span>Title</span>
+                  <input name="player_title" value="" maxlength="100" placeholder="Optional: the Ashbound, Courier, Nameless One" />
+                </label>
+
+                <label>
+                  <span>Age</span>
+                  <input name="player_age" value="" maxlength="60" placeholder="Optional: 19, adult, appears 30" />
+                </label>
+
+                <label>
+                  <span>Sex</span>
+                  <select name="player_sex">
+                    <option value="" selected>Unspecified</option>
+                    <option value="female">Female</option>
+                    <option value="male">Male</option>
+                    <option value="intersex">Intersex</option>
+                    <option value="sexless or constructed">Sexless or constructed</option>
+                    <option value="varies by form">Varies by form</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Backstory Mode</span>
+                  <select name="backstory_mode">
+                    <option value="known">Known past</option>
+                    <option value="hidden">Hidden past</option>
+                    <option value="amnesia">Amnesia</option>
+                    <option value="fragmented memories">Fragmented memories</option>
+                    <option value="reincarnated">Reincarnated</option>
+                    <option value="transmigrated">Transmigrated</option>
+                    <option value="nameless drifter">Nameless drifter</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Memory Rules</span>
+                  <select name="memory_policy">
+                    <option value="known">Known to player</option>
+                    <option value="slow reveal">Slow reveal</option>
+                    <option value="triggered memories">Triggered memories</option>
+                    <option value="remembers former life">Remembers former life</option>
+                    <option value="former life fragments">Former life fragments</option>
+                    <option value="may never return">May never return</option>
+                    <option value="npc-held past">NPCs know fragments</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+              </div>
+
+              <div id="formerLifeIdentity" class="conditional">
+                <label>
+                  <span>Former Life Age</span>
+                  <input name="previous_life_age" value="" maxlength="60" placeholder="Optional: 34, elderly, unknown" />
+                </label>
+
+                <label>
+                  <span>Former Life Sex</span>
+                  <select name="previous_life_sex">
+                    <option value="" selected>Unspecified</option>
+                    <option value="female">Female</option>
+                    <option value="male">Male</option>
+                    <option value="intersex">Intersex</option>
+                    <option value="sexless or constructed">Sexless or constructed</option>
+                    <option value="varies by form">Varies by form</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="wide">
+                <span>Backstory</span>
+                <textarea name="character_backstory" rows="4" maxlength="1600" placeholder="Optional: birthplace or original world, family/upbringing, former work or role, how they lived before the RPG starts, and any death/reincarnation details if relevant."></textarea>
+              </label>
+
+              <section id="abilityOptions" class="abilityBuilder">
+                <header class="subsectionHeader">
+                  <div>
+                    <h2>Special Abilities</h2>
+                    <p>Add none, one, or several starting abilities. Base descriptions are locked once the game starts; the model may only add discovered details later.</p>
+                  </div>
+                  <div class="subsectionActions">
+                    <button id="randomAbilityButton" class="secondaryButton" type="button">Randomize Abilities</button>
+                    <label class="settingLock abilityLock"><input id="lockAbilityCount" type="checkbox" /> Lock Count</label>
+                    <label class="settingLock abilityLock"><input type="checkbox" data-lock-setting="special_abilities" /> Lock</label>
+                    <button id="addAbilityButton" class="secondaryButton" type="button">Add Ability</button>
+                  </div>
+                </header>
+                <fieldset id="abilityOriginOptions" class="optionSet abilityOriginOptions">
+                  <legend>Ability Origin</legend>
+                  <label><input type="radio" name="special_ability_origin" value="none" checked /> None</label>
+                  <label><input type="radio" name="special_ability_origin" value="acquired" /> Acquired</label>
+                  <label><input type="radio" name="special_ability_origin" value="innate" /> Innate</label>
+                </fieldset>
+                <div id="abilityList" class="abilityList"></div>
+              </section>
+
+            </section>
+
+            <section class="setupSection" data-step="1">
+              <header class="sectionHeader">
+                <div>
+                  <h2>World</h2>
+                  <p>The genre, opening place, tone, and physical rules of the setting.</p>
+                </div>
+                <button class="secondaryButton" data-randomize-group="world" type="button">Randomize World</button>
+              </header>
+              <div class="setupGrid">
+                <fieldset class="optionSet" data-list-setting="world_style">
+                  <legend>World</legend>
+                  <label><input type="checkbox" name="world_style" value="frontier dark fantasy" checked /> Frontier dark fantasy</label>
+                  <label><input type="checkbox" name="world_style" value="wuxia sect politics" /> Wuxia sect politics</label>
+                  <label><input type="checkbox" name="world_style" value="system apocalypse" /> System apocalypse</label>
+                  <label><input type="checkbox" name="world_style" value="post-collapse settlement" /> Post-collapse settlement</label>
+                  <label><input type="checkbox" name="world_style" value="mage academy intrigue" /> Mage academy intrigue</label>
+                  <label><input type="checkbox" name="world_style" value="space frontier salvage" /> Space frontier salvage</label>
+                  <label><input type="checkbox" name="world_style" value="custom" /> Custom</label>
+                  <textarea data-list-custom="world_style" rows="2" maxlength="120" placeholder="Custom world style"></textarea>
+                </fieldset>
+
+                <label>
+                  <span>Start</span>
+                  <input name="start_location" value="Mosswake Gate" maxlength="100" />
+                </label>
+
+                <label>
+                  <span>Tone</span>
+                  <select name="tone">
+                    <option value="grounded adventure">Grounded adventure</option>
+                    <option value="survival pressure">Survival pressure</option>
+                    <option value="political intrigue">Political intrigue</option>
+                    <option value="mythic progression">Mythic progression</option>
+                    <option value="grim road story">Grim road story</option>
+                  </select>
+                </label>
+
+                <fieldset class="optionSet" data-list-setting="economy">
+                  <legend>Economy</legend>
+                  <label><input type="checkbox" name="economy" value="scarce" checked /> Scarce</label>
+                  <label><input type="checkbox" name="economy" value="barter-heavy" /> Barter-heavy</label>
+                  <label><input type="checkbox" name="economy" value="coin-driven" /> Coin-driven</label>
+                  <label><input type="checkbox" name="economy" value="guild-controlled" /> Guild-controlled</label>
+                  <label><input type="checkbox" name="economy" value="custom" /> Custom</label>
+                  <textarea data-list-custom="economy" rows="2" maxlength="80" placeholder="Custom economy rules"></textarea>
+                </fieldset>
+
+                <label>
+                  <span>Magic</span>
+                  <select name="magic_level">
+                    <option value="rare">Rare</option>
+                    <option value="forbidden">Forbidden</option>
+                    <option value="common utility">Common utility</option>
+                    <option value="cultivation">Cultivation</option>
+                    <option value="none">None</option>
+                  </select>
+                </label>
+
+                <fieldset class="optionSet" data-list-setting="world_races">
+                  <legend>Races</legend>
+                  <label><input type="checkbox" name="world_races" value="human" checked /> Human</label>
+                  <label><input type="checkbox" name="world_races" value="elf" /> Elf</label>
+                  <label><input type="checkbox" name="world_races" value="dwarf" /> Dwarf</label>
+                  <label><input type="checkbox" name="world_races" value="orc" /> Orc</label>
+                  <label><input type="checkbox" name="world_races" value="beastfolk" /> Beastfolk</label>
+                  <label><input type="checkbox" name="world_races" value="spirit-touched" /> Spirit-touched</label>
+                  <label><input type="checkbox" name="world_races" value="custom" /> Custom</label>
+                  <textarea data-list-custom="world_races" rows="2" maxlength="400" placeholder="Custom races or ancestry rules"></textarea>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Race Magic</legend>
+                  <label><input type="radio" name="race_magic_enabled" value="false" checked /> Off</label>
+                  <label><input type="radio" name="race_magic_enabled" value="true" /> On</label>
+                </fieldset>
+
+                <label>
+                  <span>Race Magic Rarity</span>
+                  <select name="race_magic_rarity">
+                    <option value="same as world magic">Same as world</option>
+                    <option value="rare except gifted races">Rare except gifted races</option>
+                    <option value="common for specific races">Common for specific races</option>
+                    <option value="bloodline locked">Bloodline locked</option>
+                    <option value="cultural training based">Cultural training</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Tech</span>
+                  <select name="tech_level">
+                    <option value="iron age">Iron age</option>
+                    <option value="medieval">Medieval</option>
+                    <option value="early industrial">Industrial</option>
+                    <option value="near future">Near future</option>
+                    <option value="spacefaring salvage">Space salvage</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="wide">
+                <span>Custom World</span>
+                <textarea name="custom_style" rows="2" maxlength="800" placeholder="Optional: add setting constraints, themes, or banned elements."></textarea>
+              </label>
+
+              <label class="wide">
+                <span>Race Magic Rules</span>
+                <textarea name="race_magic_rules" rows="3" maxlength="1200" placeholder="Optional: e.g. humans need formal training; elves inherit low magic; dwarves favor rune craft; beastfolk rarely cast spells but recognize spirit marks."></textarea>
+              </label>
+
+              <label class="wide">
+                <span>Race Ability Rules</span>
+                <textarea name="race_ability_rules" rows="3" maxlength="1200" placeholder="Optional: list each race's innate abilities, learned racial arts, restrictions, or non-magical powers. Example: Orcs gain battle trances, riverkin breathe underwater, humans have no innate powers but learn broadly."></textarea>
+              </label>
+            </section>
+
+            <section class="setupSection" data-step="2">
+              <header class="sectionHeader">
+                <div>
+                  <h2>People</h2>
+                  <p>How dense the social world is, and what kind of conflicts drive it.</p>
+                </div>
+                <button class="secondaryButton" data-randomize-group="people" type="button">Randomize People</button>
+              </header>
+              <div class="setupGrid">
+                <label>
+                  <span>NPCs</span>
+                  <select name="npc_density">
+                    <option value="moderate">Moderate</option>
+                    <option value="sparse">Sparse</option>
+                    <option value="dense">Dense</option>
+                    <option value="faction-heavy">Faction-heavy</option>
+                  </select>
+                </label>
+
+                <fieldset class="optionSet" data-list-setting="quest_style">
+                  <legend>Quests</legend>
+                  <label><input type="checkbox" name="quest_style" value="emergent" checked /> Emergent</label>
+                  <label><input type="checkbox" name="quest_style" value="job board" /> Job board</label>
+                  <label><input type="checkbox" name="quest_style" value="faction chains" /> Faction chains</label>
+                  <label><input type="checkbox" name="quest_style" value="personal mysteries" /> Personal mysteries</label>
+                  <label><input type="checkbox" name="quest_style" value="custom" /> Custom</label>
+                  <textarea data-list-custom="quest_style" rows="2" maxlength="80" placeholder="Custom quest structure"></textarea>
+                </fieldset>
+
+                <fieldset class="optionSet" data-list-setting="faction_pressure">
+                  <legend>Factions</legend>
+                  <label><input type="checkbox" name="faction_pressure" value="local disputes" checked /> Local disputes</label>
+                  <label><input type="checkbox" name="faction_pressure" value="sect hierarchy" /> Sect hierarchy</label>
+                  <label><input type="checkbox" name="faction_pressure" value="guild control" /> Guild control</label>
+                  <label><input type="checkbox" name="faction_pressure" value="military occupation" /> Occupation</label>
+                  <label><input type="checkbox" name="faction_pressure" value="hidden cults" /> Hidden cults</label>
+                  <label><input type="checkbox" name="faction_pressure" value="custom" /> Custom</label>
+                  <textarea data-list-custom="faction_pressure" rows="2" maxlength="100" placeholder="Custom faction pressure"></textarea>
+                </fieldset>
+
+                <label>
+                  <span>NPC Stats</span>
+                  <select name="npc_stat_scaling">
+                    <option value="relative ranks">Relative ranks</option>
+                    <option value="mostly weaker">Mostly weaker</option>
+                    <option value="near player">Near player</option>
+                    <option value="swingy ranks">Swingy ranks</option>
+                    <option value="elite-heavy">Elite-heavy</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>NPC Skills</span>
+                  <select name="npc_skill_frequency">
+                    <option value="some trained NPCs">Some trained NPCs</option>
+                    <option value="no special NPC skills">No special NPC skills</option>
+                    <option value="rare specialists">Rare specialists</option>
+                    <option value="many trained NPCs">Many trained NPCs</option>
+                    <option value="almost everyone has skills">Almost everyone</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Rank Scale</span>
+                  <select name="rank_scale">
+                    <option value="F,E,D,C,B,A,S,SS,SSS">F to SSS</option>
+                    <option value="D,C,B,A,S">D to S</option>
+                    <option value="Common,Trained,Veteran,Elite,Mythic">Named tiers</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section class="setupSection" data-step="3">
+              <header class="sectionHeader">
+                <div>
+                  <h2>Rules</h2>
+                  <p>Risk level, progression systems, and game-like interfaces inside the world.</p>
+                </div>
+                <button class="secondaryButton" data-randomize-group="rules" type="button">Randomize Rules</button>
+              </header>
+              <div class="setupGrid">
+                <label>
+                  <span>Difficulty</span>
+                  <select name="difficulty">
+                    <option value="normal">Normal</option>
+                    <option value="easy">Easy</option>
+                    <option value="hard">Hard</option>
+                    <option value="brutal">Brutal</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Death</span>
+                  <select name="death_rules">
+                    <option value="downed, not deleted">Downed</option>
+                    <option value="lasting injuries">Injuries</option>
+                    <option value="permadeath threat">Permadeath threat</option>
+                    <option value="narrative setback">Setback</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Narration Detail</span>
+                  <select name="narration_detail">
+                    <option value="rich" selected>Rich</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="expansive">Expansive</option>
+                    <option value="concise">Concise</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Loot Rarity</span>
+                  <select name="loot_rarity">
+                    <option value="earned and uncommon" selected>Earned</option>
+                    <option value="scarce mundane">Scarce</option>
+                    <option value="generous adventuring">Generous</option>
+                    <option value="high-magic loot">High magic</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Carry Weight</span>
+                  <input name="inventory_weight_limit" type="number" min="1" max="100000" step="1" value="60" />
+                </label>
+
+                <label>
+                  <span>Inventory Slots</span>
+                  <input name="inventory_slot_limit" type="number" min="1" max="10000" step="1" value="24" />
+                </label>
+
+                <label class="wide">
+                  <span>Inventory Rules</span>
+                  <textarea name="inventory_rules" rows="2" maxlength="900" placeholder="Optional: storage magic, backpacks, accessory limits, item quantities, and equipment slot rules."></textarea>
+                </label>
+
+                <label>
+                  <span>Skill Learning</span>
+                  <select name="skill_style">
+                    <option value="standard">Standard</option>
+                    <option value="generous">Generous</option>
+                    <option value="training-heavy">Training-heavy</option>
+                    <option value="strict">Strict</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <fieldset class="toggleSet">
+                  <legend>Proficiencies</legend>
+                  <label><input type="radio" name="proficiency_system" value="true" checked /> On</label>
+                  <label><input type="radio" name="proficiency_system" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Skill Levels</legend>
+                  <label><input type="radio" name="skill_levels_enabled" value="true" checked /> On</label>
+                  <label><input type="radio" name="skill_levels_enabled" value="false" /> Off</label>
+                </fieldset>
+
+                <label>
+                  <span>Access</span>
+                  <select name="proficiency_access">
+                    <option value="learned">Must learn</option>
+                    <option value="familiar actions free">Familiar actions free</option>
+                    <option value="only expert tasks require training">Expert tasks only</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Custom Proficiencies</span>
+                  <textarea name="custom_skills" rows="2" maxlength="800" placeholder="Comma-separated: lockpicking, first aid, urban navigation. Use commas between each proficiency or rule phrase."></textarea>
+                </label>
+
+                <label>
+                  <span>New Skills</span>
+                  <select name="new_skill_frequency">
+                    <option value="normal">Normal</option>
+                    <option value="very rare">Very rare</option>
+                    <option value="rare">Rare</option>
+                    <option value="frequent">Frequent</option>
+                    <option value="very frequent">Very frequent</option>
+                  </select>
+                </label>
+
+                <label class="gainControl" data-gain-control="xp_growth_speed">
+                  <span>XP Gain</span>
+                  <select name="xp_growth_speed">
+                    <option value="normal">Normal</option>
+                    <option value="very slow">Very slow</option>
+                    <option value="slow">Slow</option>
+                    <option value="fast">Fast</option>
+                    <option value="very fast">Very fast</option>
+                  </select>
+                  <label class="customGainToggle"><input type="checkbox" data-custom-gain="xp_growth_speed" /> Custom gain</label>
+                  <div class="gainSliderRow">
+                    <input type="range" data-gain-slider="xp_growth_speed" min="0.25" max="10" step="0.25" value="1" disabled />
+                    <input type="number" data-gain-number="xp_growth_speed" min="0" max="100" step="0.01" value="1.00" disabled />
+                  </div>
+                  <textarea data-gain-note="xp_growth_speed" rows="2" maxlength="500" placeholder="Optional custom XP rule, e.g. XP only from goals, no combat XP, milestone-only." disabled></textarea>
+                </label>
+
+                <label class="gainControl" data-gain-control="skill_growth_speed">
+                  <span>Skill Gain</span>
+                  <select name="skill_growth_speed">
+                    <option value="normal">Normal</option>
+                    <option value="very slow">Very slow</option>
+                    <option value="slow">Slow</option>
+                    <option value="fast">Fast</option>
+                    <option value="very fast">Very fast</option>
+                  </select>
+                  <label class="customGainToggle"><input type="checkbox" data-custom-gain="skill_growth_speed" /> Custom gain</label>
+                  <div class="gainSliderRow">
+                    <input type="range" data-gain-slider="skill_growth_speed" min="0.25" max="10" step="0.25" value="1" disabled />
+                    <input type="number" data-gain-number="skill_growth_speed" min="0" max="100" step="0.01" value="1.00" disabled />
+                  </div>
+                  <textarea data-gain-note="skill_growth_speed" rows="2" maxlength="500" placeholder="Optional custom skill rule, e.g. social skills improve quickly, combat requires training." disabled></textarea>
+                </label>
+
+                <label class="gainControl" data-gain-control="proficiency_growth_speed">
+                  <span>Proficiency Gain</span>
+                  <select name="proficiency_growth_speed">
+                    <option value="normal">Normal</option>
+                    <option value="very slow">Very slow</option>
+                    <option value="slow">Slow</option>
+                    <option value="fast">Fast</option>
+                    <option value="very fast">Very fast</option>
+                  </select>
+                  <label class="customGainToggle"><input type="checkbox" data-custom-gain="proficiency_growth_speed" /> Custom gain</label>
+                  <div class="gainSliderRow">
+                    <input type="range" data-gain-slider="proficiency_growth_speed" min="0.25" max="10" step="0.25" value="1" disabled />
+                    <input type="number" data-gain-number="proficiency_growth_speed" min="0" max="100" step="0.01" value="1.00" disabled />
+                  </div>
+                  <textarea data-gain-note="proficiency_growth_speed" rows="2" maxlength="500" placeholder="Optional custom proficiency rule, e.g. new proficiencies require downtime and a teacher." disabled></textarea>
+                </label>
+
+                <fieldset class="toggleSet">
+                  <legend>Leveling</legend>
+                  <label><input type="radio" name="leveling_system" value="true" checked /> Yes</label>
+                  <label><input type="radio" name="leveling_system" value="false" /> No</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Game System</legend>
+                  <label><input type="radio" name="game_system" value="false" checked /> No</label>
+                  <label><input type="radio" name="game_system" value="true" /> Yes</label>
+                </fieldset>
+              </div>
+
+              <div id="systemOptions" class="conditional">
+                <label>
+                  <span>System Style</span>
+                  <select name="system_style">
+                    <option value="subtle blue-window system">Status Window</option>
+                    <option value="cold quest-log interface">Quest Log</option>
+                    <option value="cultivation status pane">Cultivation Panel</option>
+                    <option value="diegetic omen prompts">World Omens</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <p id="systemStyleDescription" class="settingDescription"></p>
+                </label>
+              </div>
+            </section>
+          </div>
+
+          <footer class="setupFooter">
+            <button id="setupPrev" class="secondaryButton" type="button">Back</button>
+            <div class="stepStatus" id="setupStepStatus">Step 1 of 4</div>
+            <button id="setupNext" type="button">Next</button>
+          </footer>
+        </form>
+      </section>
+
+      <div id="modelModal" class="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modelModalTitle">
+        <section class="modalPanel">
+          <header class="modalHeader">
+            <div>
+              <h2 id="modelModalTitle">LLM Settings</h2>
+              <p>Choose the local model connection used for setup randomization and gameplay turns.</p>
+            </div>
+            <label id="closeModelModal" class="buttonLike secondaryButton" for="modelModalToggle">Close</label>
+          </header>
+          <div id="modelModalContent">
+            <form id="modelForm" class="modelForm">
+              <input type="hidden" name="provider" value="llama_cpp" />
+              <input type="hidden" name="ollama_model" value="llama3.1" />
+              <input type="hidden" name="ollama_base_url" value="http://localhost:11434" />
+              <label>
+                <span>Model Path</span>
+                <div class="pathPickerRow">
+                  <input name="gguf_model_path" value="" maxlength="1000" placeholder="D:\path\to\model.gguf" />
+                  <button class="secondaryButton selectModelFile" type="button">Select File</button>
+                </div>
+              </label>
+              <label>
+                <span>LLM Server URL</span>
+                <input name="llama_cpp_base_url" value="http://localhost:8080" maxlength="300" />
+              </label>
+              <div class="modelTokenGrid">
+                <label>
+                  <span>Response Cap</span>
+                  <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="1500" />
+                </label>
+                <label>
+                  <span>Hard Cap</span>
+                  <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="2000" />
+                </label>
+              </div>
+              <div class="modelButtonRow">
+                <button type="submit">Save Model</button>
+                <button class="secondaryButton testModelConnection" type="button">Test Connection</button>
+              </div>
+            </form>
+            <div class="modelStatus" data-model-status></div>
+            <p class="empty">Select the local model file and the URL of the compatible LLM server that will run it.</p>
+          </div>
+        </section>
+      </div>
+
+      <section id="gameView" class="gameView hidden">
+        <section class="playPane">
+          <header class="topbar">
+            <div>
+              <h1>AI RPG</h1>
+              <p id="locationLine">Loading</p>
+            </div>
+            <div class="topActions">
+              <button id="newGameButton" type="button">New</button>
+              <button id="regenerateButton" type="button">Regenerate</button>
+              <button id="rewindButton" type="button">Rewind</button>
+              <button id="exportButton" type="button">Export</button>
+              <button id="importButton" type="button">Import</button>
+              <button id="modelButton" type="button">LLM</button>
+              <button id="refreshButton" type="button">Refresh</button>
+              <input id="importFile" class="hidden" type="file" accept="application/json,.json" />
+            </div>
+          </header>
+
+          <article class="currentTurn">
+            <div class="turnBlock">
+              <h2>Input</h2>
+              <div id="latestInput" class="singleBox mutedBox"></div>
+            </div>
+            <div class="turnBlock outputBlock">
+              <h2>Output</h2>
+              <div id="latestOutput" class="singleBox"></div>
+            </div>
+          </article>
+
+          <form id="turnForm" class="composer">
+            <textarea id="turnInput" placeholder="What do you do?" rows="3" maxlength="2000"></textarea>
+            <div class="composerActions">
+              <button id="sendButton" type="submit">Continue</button>
+              <button id="continueButton" class="secondaryButton" type="button">Continue</button>
+              <button id="suggestButton" class="secondaryButton" type="button">Suggest</button>
+            </div>
+            <div id="suggestionPanel" class="suggestionPanel hidden" aria-live="polite">
+              <div id="suggestionList" class="suggestionList"></div>
+              <div class="suggestionRegenRow">
+                <input id="suggestionInstruction" maxlength="500" placeholder="(Optional) Idea regen instructions." />
+                <button id="regenSuggestionsButton" class="secondaryButton" type="button">regen</button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <aside class="sidePane">
+          <section class="historyPane">
+            <header>
+              <h2>History</h2>
+            </header>
+            <div id="history" class="historyList"></div>
+          </section>
+
+          <section class="indexPane">
+            <header class="tabs" id="indexTabs">
+              <button data-tab="player" class="active" type="button">Player</button>
+              <button data-tab="inventory" type="button">Inventory</button>
+              <button data-tab="bible" type="button">Bible</button>
+              <button data-tab="search" type="button">Search</button>
+              <button data-tab="model" type="button">Model</button>
+              <button data-tab="npcs" type="button">NPCs</button>
+              <button data-tab="items" type="button">Items</button>
+              <button data-tab="places" type="button">Places</button>
+              <button data-tab="events" type="button">Events</button>
+              <button data-tab="talk" type="button">Talk</button>
+              <button data-tab="drafts" type="button">Checks</button>
+            </header>
+            <div id="indexContent" class="indexContent"></div>
+          </section>
+        </aside>
+      </section>
+
+      <div id="entityMenu" class="entityMenu hidden" role="dialog" aria-modal="false">
+        <header>
+          <div>
+            <h2 id="entityTitle">Entity</h2>
+            <p id="entityMeta"></p>
+          </div>
+          <button id="closeEntityMenu" type="button">Close</button>
+        </header>
+        <div id="entityBody" class="entityBody"></div>
+        <div class="entityActions">
+          <button id="insertEntityRef" type="button">Insert Ref</button>
+          <form id="aliasForm" class="aliasForm">
+            <input id="aliasInput" name="alias" placeholder="alias" maxlength="80" />
+            <button type="submit">Alias</button>
+          </form>
+        </div>
+      </div>
+    </main>
+
+    <script src="/static/app.js?v=v0-6-0"></script>
+  </body>
+</html>
