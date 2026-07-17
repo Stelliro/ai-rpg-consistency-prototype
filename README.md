@@ -1,9 +1,5 @@
-# Mørkyn
+# AI RPG Consistency Prototype
 
-**Dark, original local AI RPG with stable agentic loop and durable memory.**
+Version `0.6.0`
 
-Long playthroughs without bloat. Now with hierarchical memory, token budgeting, and more.
-
-## Features
-
-- ... (full rebrand)
+AI RPG Consistency Prototype is a local-first browser RPG experiment. ... (full original content from earlier)
