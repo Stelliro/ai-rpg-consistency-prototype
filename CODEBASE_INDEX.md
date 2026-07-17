@@ -9,7 +9,7 @@
 
 ## 1. Project Overview
 
-**Mørkyn** (formerly AI RPG Consistency Prototype) - an endless local-browser RPG where a local LLM narrates turns and proposes structured world changes while SQLite remains the source of truth.
+**Mørkyn** (formerly Mørkyn) - an endless local-browser RPG where a local LLM narrates turns and proposes structured world changes while SQLite remains the source of truth.
 
 - **Type:** Local web app / game prototype
 - **Primary Languages:** Python, JavaScript, HTML, CSS

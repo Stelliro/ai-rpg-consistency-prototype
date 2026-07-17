@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **M├╕rkyn** (formerly AI RPG Consistency Prototype) are documented here.
+All notable changes to **Mørkyn** (formerly Mørkyn) are documented here.
 
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -25,10 +25,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [0.7.0] - 2026-07-17
 
-> Rebrand to **M├╕rkyn**, long-play memory/token tools, campaign slots, combat handoff, verification memory, and UI polish.
+> Rebrand to **Mørkyn**, long-play memory/token tools, campaign slots, combat handoff, verification memory, and UI polish.
 
 ### Added
-- [BRAND] Rebranded product name, UI titles, API metadata, launchers, and documentation to **M├╕rkyn**
+- [BRAND] Rebranded product name, UI titles, API metadata, launchers, and documentation to **Mørkyn**
 - [DOCS] Added `Media/` brand gallery (logo + key art) referenced from README
 - [MEM] Hierarchical memory consolidation (`consolidate_memory`) into durable source-index facts
 - [LLM] Pre-call `enforce_token_budget()` estimation and pruning
