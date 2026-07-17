@@ -1,0 +1,81 @@
+{
+  "title": "Mørkyn local turn metrics — qwen3:8b",
+  "date": "2026-07-17",
+  "host": {
+    "provider": "ollama",
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen3:8b",
+    "parameter_size": "8.2B",
+    "quantization": "Q4_K_M",
+    "context_tokens": 32768,
+    "ollama_think": false
+  },
+  "config": {
+    "response_token_cap": 1200,
+    "response_token_hard_cap": 1800,
+    "draft_mode_note": "Measured on legacy JSON draft path with draft/verify/repair loops (pre-NAR+OPS default in production path after commit e7b03dd)."
+  },
+  "full_playtest": {
+    "tool": "tools/playtest_timed_turns.py",
+    "source_report": "data/playtest_reports/playtest-20260717-233028.json",
+    "total_seconds": 674.24,
+    "mean_seconds_per_step": 168.6,
+    "steps": [
+      {
+        "label": "opening",
+        "seconds": 185.9,
+        "used_fallback": false,
+        "narration_preview": "The Mosswake Gate is a crossroads where the road stretches into the wild, and the air is thick with the scent of damp stone and smoke..."
+      },
+      {
+        "label": "turn_1",
+        "seconds": 114.0,
+        "used_fallback": true,
+        "fallback_reason": "Model JSON did not include usable narration text.",
+        "action": "I scan the gate square carefully, note guards and exits, and ask a nearby merchant what trouble has been happening lately."
+      },
+      {
+        "label": "turn_2",
+        "seconds": 180.81,
+        "used_fallback": false,
+        "action": "I thank them, buy a cheap travel ration if available, and walk toward the most suspicious alley while staying alert."
+      },
+      {
+        "label": "turn_3",
+        "seconds": 193.51,
+        "used_fallback": false,
+        "action": "I keep my hand near my satchel, listen at the alley mouth for a moment, then step in only as far as I can still retreat."
+      }
+    ],
+    "phase_token_estimates": {
+      "draft": { "n": 6, "mean": 9237, "max": 9587 },
+      "verify": { "n": 4, "mean": 4417, "max": 4667 },
+      "narration_depth_retry": { "n": 5, "mean": 10344, "max": 10570 },
+      "draft_repair": { "n": 6, "mean": 1642, "max": 1669 },
+      "verify_repair": { "n": 5, "mean": 1094, "max": 1108 }
+    },
+    "coherence_notes": [
+      "Opening and turns 2–3 produced coherent Mosswake Gate frontier prose.",
+      "Turn 1 used deterministic fallback after missing narration in model JSON.",
+      "All observed turns remained at Mosswake Gate (player did not leave)."
+    ]
+  },
+  "smoke_open_turn": {
+    "tool": "tools/smoke_open_turn.py",
+    "source_report": "data/playtest_reports/smoke4-open-turn.json",
+    "opening_seconds": 98.3,
+    "turn1_seconds": 128.59,
+    "total_seconds": 226.89,
+    "opening_fallback": false,
+    "turn_fallback": false
+  },
+  "practical_summary": {
+    "typical_turn_range_seconds": [90, 210],
+    "typical_turn_range_minutes": [1.5, 3.5],
+    "mean_step_minutes": 2.8,
+    "notes": [
+      "Wall time is dominated by multiple LLM calls per turn, not SQLite apply.",
+      "Re-run metrics after enabling AI_RPG_DRAFT_MODE=dsl / fewer verify loops to update published numbers."
+    ]
+  }
+}

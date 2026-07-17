@@ -28,6 +28,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - [LLM] Soft token-budget pass when system prompt alone still fits the context window
 - [TOOLS] Timed multi-turn playtest and open+turn smoke scripts under `tools/`
 - [DOCS] `docs/TurnDsl.md` for opcode table and escape policy
+- [DOCS] Published local 8B turn metrics under `docs/turn-metrics/` and README section
 
 ### Changed
 - [LLM] `generate_turn` prefers DSL draft then optional verify; depth retries only when narration is short

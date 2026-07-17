@@ -98,6 +98,25 @@ $env:AI_RPG_MEMORY_MAX_FACTS="200"
 $env:AI_RPG_GM_OFFSCREEN_INTERVAL="8"
 ```
 
+## Local 8B turn times
+
+Measured on **Ollama `qwen3:8b`** (Q4_K_M, 32k context, thinking off). Times are wall-clock for a full turn pipeline (draft + repairs + verify on the machine under test), not pure token decode.
+
+| Step | Time |
+| --- | ---: |
+| Opening scene | ~**1.5–3.1 min** (98–186 s) |
+| Typical player turn | ~**1.5–3.5 min** (114–194 s) |
+| Mean step (opening + 3 turns) | ~**2.8 min** (~169 s) |
+| Full playtest total (4 steps) | ~**11.2 min** (674 s) |
+
+On local 8B, expect multi-minute turns when draft and verify both run. Faster machines, smaller context, `AI_RPG_FAST_VERIFICATION`, or NAR+OPS draft mode (`AI_RPG_DRAFT_MODE=dsl`) can improve this; re-measure after changes.
+
+Full tables and JSON: [`docs/turn-metrics/`](docs/turn-metrics/). Re-run:
+
+```powershell
+python tools/playtest_timed_turns.py
+```
+
 ## Play UI notes
 
 - **Save Slot / Load Slot** - named campaigns under `data/campaign_slots/`.
