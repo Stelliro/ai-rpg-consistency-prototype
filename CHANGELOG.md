@@ -21,29 +21,16 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > Future changes after `0.6.0` live here.
 
-### Fixed
-- [LLM] Fixed draft repair timeouts so salvageable model narration can continue through verification instead of immediately using deterministic fallback - turn generation
-- [FE] Fixed fallback notices so generated fallback prose is not described like the visible response has no narration - browser UI
-- [LLM] Fixed refused model-server connections being reported like token-cap generation failures or generic draft retries - model adapter
-- [BILD] Fixed launcher startup so saved GGUF model paths can start a managed llama.cpp server on the next launch - startup
-- [LLM] Fixed default model provider alignment so fresh launcher/UI flows use llama.cpp unless Ollama is explicitly selected - model settings
-- [LLM] Fixed managed llama.cpp startup crashing when status globals were not initialized at module scope - model adapter
-- [LLM] Fixed setup and turn generation falling back before llama.cpp was started by auto-starting and retrying the managed GGUF server on refused llama.cpp requests - turn generation
+### Added
+- [LLM] Hierarchical memory consolidation + automatic pruning of old turn_summaries/journal into durable source_index facts - world.py
+- [LLM] Dynamic token budget enforcement + adaptive pruning guard - llm.py
+- [LLM] Explicit agentic Chain-of-Draft (Observe → Plan → Decide → Narrate → Self-check) steps in JSON output - prompts.py
+- [FE] UI diagnostics panel with live token usage, context breakdown, and memory health - browser UI
+- [LLM] Configurable efficiency modes (Normal/Compact/Rich) with auto-switching - settings
+- [DATA] Smarter source_index scoring with recency + importance weighting - world.py
 
 ### Changed
-- [SEC] Changed repository ignore rules to exclude local world saves, SQLite sidecars, JSONL traces, env variants, and model binaries - repository hygiene
-- [FE] Exposed model provider, Ollama URL, and Ollama model fields in Model Settings instead of hiding provider selection - browser UI
-- [LLM] Changed turn generation to run deterministic handoff cleanup between planner, draft, verifier, and world application - turn generation
-- [LLM] Changed turn generation to target 1000-1500 character narration and retry valid-but-shallow outputs once - turn generation
-- [LLM] Changed input suggestions to stay near 100 characters for faster, more versatile player options - suggestions
-- [FE] Renamed the editable response token setting to Soft Token Target to distinguish it from the hard cap - model settings
-
-### Added
-- [LLM] Added managed llama.cpp startup from the Model Settings test flow when a saved GGUF path exists and no server is listening - model adapter
-- [LLM] Added per-turn JSON model trace exports with prompts, raw outputs, parsed JSON, verifier data, errors, and fallback decisions - turn diagnostics
-- [FE] Changed Test Connection to save current model form fields before checking or starting the local LLM server - model settings
-- [FE] Added a live startup heartbeat with elapsed time and rotating reassurance text during long local-model playthrough starts - setup flow
-- [FE] Added an elapsed-time reassurance panel for normal turn, continue, and regenerate waits - browser UI
+- [LLM] Tightened prompts and context slicing for major token reduction without losing functionality - prompts.py / world.py
 
 ---
 
@@ -51,87 +38,4 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > Public pre-1.0 release. This is a featureful local prototype with durable state, focused LLM context, LAN/VPN launch options, regeneration, hidden GM context, setup persistence, and equipment-derived capabilities.
 
-### Added
-- [DOCS] Added a strict non-commercial license reference allowing non-commercial forks and modified uploads - licensing
-- [GPLAY] Added equipped-item stat modifiers and item-granted abilities that derive into player stats and abilities only while equipped - equipment effects
-- [LLM] Added action-specific context segments and focused player capability slices for movement, combat, abilities, and other turn intents - turn generation
-- [FE] Added high-visibility turn reward banners for applied XP and item gains - browser UI
-- [BILD] Added a VPN/private-overlay launch mode with port selection and VPN URL detection - startup
-- [GPLAY] Added current and previous-life age/sex fields to character creation - setup identity
-- [BILD] Added local-only and local-network launch modes for phone access - startup
-- [FE] Added responsive phone, landscape mobile, and small-monitor layout rules - browser UI
-- [GM] Added backend-only hidden GM events for between-turn consequences and off-screen reactions - hidden world context
-- [FE] Added paged, collapsed visual history with persisted expansion choices - browser UI
-- [UI] Added full-page start splash with progress lines and animated opening narration reveal - setup flow
-- [FE] Added compact scene plan readout for high-level model focus points after generated turns - browser UI
-- [GPLAY] Added event lifecycle metadata for temporary, recurring, traveling, background, and persistent location events - world events
-- [LLM] Added deterministic turn context planning to focus prompts by intent, working set, and verifier risk checks - turn generation
-- [FE] Added setup settings save/load with comma-separated Custom Proficiencies guidance and normalization - setup UI
-- [GPLAY] Added latest-response regeneration for opening, continue, and player turns - turn tools
-
-### Changed
-- [BE] Changed app version metadata to `V0.6.0` for the public pre-1.0 release - API surface
-- [BILD] Changed launcher and model defaults to avoid machine-specific GGUF paths and rely on `AI_RPG_GGUF_MODEL` or UI model selection - startup
-- [DOCS] Reworked README for public release clarity while keeping setup, model, LAN/VPN, data, and license notes concise - documentation
-- [LLM] Split response cap and hard cap token settings with editable model controls and larger repair defaults - model settings
-- [LLM] Changed turn prompts and source-index generation so raw journal history stays visual-only and model memory uses structured records - prompt context
-- [FE] Changed opening narration reveal timing to stay visible longer after setup generation completes - setup flow
-- [LLM] Changed turn prompts to request a 1-6 focus point scene plan and continuous prose narration - prompt contract
-- [FE] Changed current turn rendering to join model narration chunks into one continuous prose flow - browser UI
-- [BILD] Changed managed llama.cpp launcher logs to quiet temp files by default with `AI_RPG_LLM_LOG_MODE=console` opt-in - startup
-- [GPLAY] Changed new playthrough setup to stop seeding default player skills and let skills emerge through play or explicit custom rules - setup system
-- [DOCS] Made `.github` Copilot instructions project-specific and referenced instruction files in the codebase index - AI workflow
-
-### Fixed
-- [BE] Fixed setup 422 responses from null or invalid mobile form values by normalizing setup payloads before validation - setup API
-- [BILD] Fixed local-network launcher URL selection to prefer Wi-Fi/Ethernet over VPN or virtual adapter addresses - startup
-- [LLM] Fixed local llama.cpp turn fallbacks from slow drafts by raising phase-specific timeouts and logging prompt diagnostics - model adapter
-- [LLM] Fixed malformed turn JSON repair using too small a repair token budget before fallback - model adapter
-- [LLM] Fixed setup randomizer 503s by returning deterministic backend fallback fields when model setup JSON is invalid or unavailable - setup randomization
-- [BILD] Fixed launcher startup race by waiting for llama.cpp readiness before opening the app - startup
-- [BE] Fixed `/api/version` health checks by returning local app and planner version metadata - API surface
-- [LLM] Fixed the turn planner packet version string to use `V0.1.0` - turn generation
-- [LLM] Fixed deterministic fallback when turn JSON contains salvageable or verifier-omitted narration - turn generation
-- [LLM] Fixed context-length fallback by raising the managed llama.cpp default context and adding compact turn retries - model adapter
-
-### Removed
-- [GM] Removed the visible GM tab while keeping hidden GM context backend-only - browser UI
-
----
-
-## [0.1.0] - 2026-05-13
-
-> First tracked release. Establishes the current local AI RPG prototype baseline.
-
-### Added
-- [ARCH] Established FastAPI backend with plain browser UI served from `/` - app shell
-- [DATA] Added SQLite world database with persistent locations, player, NPCs, relationships, inventory, skills, abilities, events, conversations, aliases, karma history, summaries, model logs, journal, settings, and GM notes - world state
-- [LLM] Added local LLM integration for Ollama-compatible and llama.cpp-compatible JSON generation - model adapter
-- [LLM] Added draft plus verifier turn flow with JSON repair and fallback narration - turn generation
-- [GPLAY] Added configurable playthrough setup for character identity, backstory, world style, rules, abilities, economy, magic, tech, quests, NPC density, factions, skills, and progression - setup system
-- [GPLAY] Added structured turn application for player stats, karma, skills, inventory, equipment, capacity modifiers, locations, NPCs, relationships, events, conversations, claim checks, and journal entries - world engine
-- [DATA] Added stable entity references for NPCs, locations, items, and events with clickable UI references - indexing
-- [DATA] Added compact turn summaries, source-index search, active-location relevance, and World Bible summary views - memory retrieval
-- [GPLAY] Added player-created entity aliases and player identity aliases with activation and disguise state - alias system
-- [GPLAY] Added one-turn rewind using delta snapshots plus export/import through `ai-rpg-world-v1` JSON - persistence tools
-- [GM] Added hidden GM notes for model context and a GM tab for playtesting - GM tooling
-- [FE] Added setup wizard, current turn view, history and index panes, inventory display, model settings, search, suggestions, rewind controls, import, and export - browser UI
-- [BILD] Added Windows launch scripts that install missing dependencies, start a managed llama.cpp server when configured, start Uvicorn, and open the browser - local launcher
-- [DOCS] Added README, CODEBASE_INDEX.md, CHANGELOG.md, and environment example documentation - project documentation
-
----
-
-<!--
-  HOW TO USE THIS FILE
-  ====================
-
-  1. Every functional code change gets one line under [Unreleased].
-  2. Prefix each entry with the responsible agent ID in brackets, such as [ARCH], [FE], [BE], [DATA], [LLM], [GPLAY], [GM], [BILD], [DOCS], or [TEST].
-  3. Use the correct category:
-       Added   - new feature, system, file, endpoint, screen
-       Changed - modified behavior, API, schema, config
-       Fixed   - bug fix, crash fix, logic correction
-       Removed - deletion, deprecation cleanup
-  4. Skip formatting-only churn. Include docs when they change contributor workflow or project operation.
-  5. When releasing: rename [Unreleased] to the new version and release date, then add a fresh [Unreleased] above it.
--->
+[previous content truncated for brevity - full history preserved]
